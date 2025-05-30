@@ -1112,3 +1112,230 @@ Object::~Object()
 ```
 
 ## [ステップ 07](https://github.com/tokoik/particle/blob/step07/README.md)
+
+## 8. 描画処理
+
+### 8.1 main.cpp への組み込み
+
+これまでに作成したシェーダのプログラムオブジェクト作成関数 `loadProgram()` や `Object` 構造体を、main.cpp で使えるようにします。shader.cpp で定義した関数 `loadProgram()` を main.cpp で使用するために、その宣言を格納した shader.h を `#include` します。また、図形のデータを保持する `Object` 構造体を使用するために、Object.h を `#include` します。図形は 10,000 個の点（粒子群）とし、その初期値を乱数で与えるために random も `#include` します。
+
+このプログラムでは、GLM の `glm::vec4` や `glm::mat4` のようなデータ型の変数などからデータが格納されている場所のポインタを取り出す `glm::value_ptr()` を使うので、それが宣言されている GLM/gtc/type_ptr.hpp を `#include` します。また、平行移動の変換行列を求める `glm::translate()` やビュー（視野）変換行列を作るのに便利な `glm::lookAt()`、透視投影変換行列を作るのに便利な `glm::perspective()` などが宣言されている GLM/gtc/matrix_transform.hpp も `#include` します。
+
+```cpp
+// Windows の OpenGL ライブラリをリンクする
+#pragma comment(lib, "opengl32.lib")
+
+// ウィンドウ関連の処理
+#include "Window.h"
+
+// OpenGL のエラーチェック
+#include "errorcheck.h"
+
+// シェーダの読み込み処理
+#include "shader.h"
+
+// 図形関連の処理
+#include "Object.h"
+
+// 粒子数
+const auto PARTICLE_COUNT{ 10000 };
+
+// 乱数
+#include <random>
+
+// GLM 関連
+#include <GLM/gtc/type_ptr.hpp>
+#include <GLM/gtc/matrix_transform.hpp>
+
+// 標準ライブラリ
+#include <iostream>
+```
+
+### 8.2 点群データの作成
+
+`Object` 構造体に点群データを作成する関数を作成します。この頂点バッファオブジェクト `object.vbo` をメインメモリにマップし、`glm::vec4` 型の配列と見なして、一つ一つの要素に点の位置を格納します。
+
+点群は球状に配置する場合と立方体状に配置する場合を切り替えられるようにしておきます。いずれも点の密度が均一になるようにします。点群を半径 $R$ の球状に配置するには、$u$、$w$ を 0～1 の一様乱数、$v$ を -1～1 の一様乱数として、$r=\sqrt[3]{w}R$、$x=r\sqrt{1-v^2}\cos\left(2\pi u\right)$、$y=r\sqrt{1-v^2}\sin\left(2\pi u\right)$、$z=rv$ とします。
+
+```cpp
+///
+/// 点群データの作成
+///
+/// @param[in] object 点群データを作成する対象のオブジェクト
+/// @param[in] scale 点群データのスケール
+/// @param[in] sphere 球状に配置する場合は true、立方体状に配置する場合は false
+///
+void generateParticles(const Object& object, float scale, bool sphere = true)
+{
+  // 乱数生成器を初期化する
+  std::random_device seed_gen;
+  std::mt19937 engine(seed_gen());
+
+  // 頂点バッファオブジェクトをバインドして頂点データをマップする
+  glBindBuffer(GL_ARRAY_BUFFER, object.vbo);
+  const auto position{ static_cast<glm::vec4*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY)) };
+
+  // 球状に配置するか立方体状に配置するか
+  if (sphere)
+  {
+    // 球状に配置する場合は、0.0f から 1.0f の範囲の一様乱数を生成する
+    std::uniform_real_distribution<GLfloat> dist(0.0f, 1.0f);
+
+    // 粒子の初期位置を設定する
+    for (auto i = 0; i < object.count; ++i)
+    {
+      const float u{ dist(engine) };
+      const float v{ dist(engine) * 2.0f - 1.0f };
+      const float w{ dist(engine) };
+      const float r{ cbrt(w) * scale };
+      const float s{ sqrt(1.0f - v * v) * r };
+      const float t{ u * 6.2831853f };
+
+      // 粒子を球状に配置する
+      position[i] = { s * cos(t), s * sin(t), r * v, 1.0f };
+    }
+  }
+  else
+  {
+    // 立方体状に配置する場合は、-0.5f * scale から 0.5f * scale の範囲の一様乱数を生成する
+    std::uniform_real_distribution<GLfloat> dist(-0.5f * scale, 0.5f * scale);
+
+    // 粒子の初期位置を設定する
+    for (auto i = 0; i < object.count; ++i)
+    {
+      // 粒子を立方体状に配置する
+      position[i] = { dist(engine), dist(engine), dist(engine), 1.0f };
+    }
+  }
+
+  // バッファオブジェクトの結合を解除する
+  glUnmapBuffer(GL_ARRAY_BUFFER);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+```
+
+### 8.3 プログラムオブジェクトの作成
+
+GLFW の初期化が完了して OpenGL の新しい機能が使えるようになったら、シェーダのプログラムオブジェクトを作成します。プログラムオブジェクトが作成できなかったことを考えて、プログラムオブジェクトの名前 `program` が 0 でないことを確認した方が良いですね。そのあと、実行時に値を設定する必要がある変換行列の `uniform` 変数 `mc` の場所を取得しておきます。
+
+```cpp
+///
+/// メインプログラム
+///
+/// @return プログラムが正常に終了した場合は 0
+///
+auto main() -> int
+{
+  //
+  // 中略
+  //
+
+  // GLEW の初期化時にすべての API のエントリポイントを見つけるようにして
+  glewExperimental = GL_TRUE;
+
+  // GLEW を初期化する
+  if (glewInit() != GLEW_OK)
+  {
+    // GLEW の初期化に失敗したのでエラーメッセージを出して
+    std::cerr << "Can't initialize GLEW" << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // プログラムオブジェクトを作成する
+  const auto program{ loadProgram("point.vert", "point.frag") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (program == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create program object." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // uniform 変数 mc の場所を取得する
+  const auto mcLoc{ glGetUniformLocation(program, "mc") };
+```
+
+### 8.4 図形の作成
+
+図形は `Object` 構造体の変数を宣言することで作成します。コンストラクタの引数は頂点バッファオブジェクトが保持する頂点の数です。これに `generateParticles()` を使って、頂点の位置を設定します。
+
+```cpp
+  // 図形を作成する
+  Object object(PARTICLE_COUNT);
+  generateParticles(object, 1.0f);
+```
+
+### 8.5 描画ループの開始
+
+ウィンドウの背景色を指定して、描画ループを開始します。`Window` クラスのインスタンス `window` を論理コンテキストで評価して、描画ループの継続条件とします。また、ループの最初でウィンドウのカラーバッファとデプスバッファを消去します。
+
+```cpp
+  // 背景色を指定する
+  glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
+
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+```
+
+### 8.6 プログラムオブジェクトの指定
+
+描画に使用するシェーダのプログラムオブジェクトを指定します。また、現在のウィンドウのアスペクト比を使って投影 (プロジェクション) 変換行列 `projection` を求め、それに視野変換行列 `view` を乗じたものを、このプログラムオブジェクトの `uniform` 変数 `mc` に設定します。投影変換の画角は 60°、図形の描画範囲は -3±1 なので、更に ±1 の余裕を持たせて near = 1、far = 5 に設定します。
+
+```cpp
+  // 背景色を指定する
+  glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
+
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // プログラムオブジェクトを指定する
+    glUseProgram(program);
+
+    // ビュー変換行列を設定する
+    const auto view{ glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f)) };
+
+    // 投影変換行列を設定する
+    const auto projection{ glm::perspective(glm::radians(60.0f), window.getAspect(), 1.0f, 10.0f) };
+
+    // uniform 変数 mc に値を設定する
+    glUniformMatrix4fv(mcLoc, 1, GL_FALSE, glm::value_ptr(projection * view));
+```
+
+### 8.7 図形の描画
+
+描画する図形の頂点配列オブジェクトを指定して点で描画すれば、頂点を粒子として表現できます。
+
+```cpp
+    // 図形を指定する
+    glBindVertexArray(object.vao);
+
+    // 図形を描画する
+    glDrawArrays(GL_POINTS, 0, object.count);
+
+    // OpenGL のエラーが発生していないかチェックする
+    errorcheck();
+
+    // カラーバッファを入れ替えてイベントを取り出す
+    window.swapBuffers();
+  }
+}
+```
+
+### 8.8 実行結果
+
+実行すると、こんな感じになります。
+
+![実行結果](images/fig19.png)
+
+## [ステップ 08](https://github.com/tokoik/particle/blob/step08/README.md)
