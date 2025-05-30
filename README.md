@@ -556,3 +556,348 @@ auto _errorcheck(const char* name, unsigned int line) -> void
 ```
 
 ## [ステップ 04](https://github.com/tokoik/particle/blob/step04/README.md)
+
+## 5. シェーダの読み込み処理
+
+shader.cpp というファイルを作成し、そこにシェーダ関連の関数を定義します。また、定義した関数を main.cpp から参照できるように、外部から参照する関数の宣言を shader.h というヘッダファイルに置きます。
+
+### 5.1 shader.cpp の作成
+
+main.cpp の作成と同様に、「プロジェクト」メニューから「新しい項目の追加(W)...」を選び、shader.cpp というファイルを作成します。
+
+### 5.2 ヘッダファイルの読み込み
+
+この shader.cpp で定義する関数の内容と、その関数の宣言するヘッダファイル shader.h の内容が矛盾しないように、shader.h を最初に `#include` しておきます。また、この処理ではコンソール入力やファイル入力、および動的配列 `std::vector` を使いますから、それらを宣言するヘッダファイルも も `#include` しておきます。
+
+```cpp
+// シェーダ関連の処理の実装
+#include "shader.h"
+
+// 標準ライブラリ
+#include <iostream>
+#include <fstream>
+#include <sstream>
+```
+
+### 5.3 シェーダのコンパイル結果を表示する関数
+
+シェーダのコンパイルは、プログラムの実行中に OpenGL のライブラリを使って行います。したがって、エラーメッセージを表示する場合も、ライブラリが保持しているメモリから取り出す必要があります。この関数は他のところから使用されないので、`static` にしておきます。
+
+```cpp
+///
+/// シェーダオブジェクトのコンパイル結果を表示する
+///
+/// @param[in] shader シェーダオブジェクト名
+/// @param[in] str コンパイルエラーが発生した場所を示す文字列
+/// @return コンパイル結果が正常ならば GL_TRUE、異常ならば GL_FALSE
+///
+static auto printShaderInfoLog(GLuint shader, const std::string& str) -> GLboolean
+{
+  // コンパイル結果を取得する
+  GLint status;
+  glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+  if (status == GL_FALSE) std::cerr << "Compile Error in " << str << std::endl;
+
+  // シェーダのコンパイル時のログの長さを取得する
+  GLsizei bufSize;
+  glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &bufSize);
+
+  // シェーダのコンパイル時のログがあるなら
+  if (bufSize > 1)
+  {
+    // ログの内容を取得する
+    std::string infoLog(bufSize, '\0');
+    GLsizei length;
+    glGetShaderInfoLog(shader, bufSize, &length, &infoLog[0]);
+
+    // ログの内容を表示する
+    std::cerr << infoLog << std::endl;
+  }
+
+  // コンパイル結果を返す
+  return status;
+}
+```
+
+### 5.4 シェーダのリンク結果を表示する関数
+
+コンパイルされたシェーダオブジェクトのリンクもプログラムの実行中に OpenGL のライブラリを使って行いますから、そのエラーメッセージもメモリから取り出す必要があります。この関数も他のところから使用されないので、`static` にしておきます。
+
+```cpp
+///
+/// プログラムオブジェクトのリンク結果を表示する
+///
+/// @param[in] program プログラムオブジェクト名
+/// @return リンク結果が正常ならば GL_TRUE、異常ならば GL_FALSE
+///
+static auto printProgramInfoLog(GLuint program) -> GLboolean
+{
+  // リンク結果を取得する
+  GLint status;
+  glGetProgramiv(program, GL_LINK_STATUS, &status);
+  if (status == GL_FALSE) std::cerr << "Link Error." << std::endl;
+
+  // シェーダのリンク時のログの長さを取得する
+  GLsizei bufSize;
+  glGetProgramiv(program, GL_INFO_LOG_LENGTH, &bufSize);
+
+  // シェーダのリンク時のログがあるなら
+  if (bufSize > 1)
+  {
+    // ログの内容を取得する
+    std::string infoLog(bufSize, '\0');
+    GLsizei length;
+    glGetProgramInfoLog(program, bufSize, &length, &infoLog[0]);
+
+    // ログの内容を表示する
+    std::cerr << infoLog << std::endl;
+  }
+
+  // リンク結果を返す
+  return status;
+}
+```
+
+### 5.5 シェーダオブジェクトを作成する関数
+
+シェーダのソースをコンパイル・リンクして作成したシェーダプログラムの実体を「プログラムオブジェクト」と言います。この手順は、次のようになります。
+
+1. `glCreateProgram()` を使って、プログラムオブジェクトを作成します。
+2. `glCreateShader(引数)` でシェーダオブジェクトを作成します。「引数」には、バーテックスシェーダのシェーダオブジェクトを作成するときは `GL_VERTEX_SHADER`、フラグメントシェーダのシェーダオブジェクトを作成するときは `GL_FRAGMENT_SHADER` を指定します。
+3. `glShaderSource()` を使ってシェーダのソースプログラムをシェーダオブジェクトのメモリに読み込みます。ソースプログラムは単一の文字列もしくは文字列の配列 (1 行 1 文字列) です。
+4. `glCompileShader()` を使って読み込んだソースプログラムをコンパイルします。
+5. バーテックスシェーダ `GL_VERTEX_SHADER` とフラグメントシェーダ `GL_FRAGMENT_SHADER` がコンパイルできたら、それぞれをプログラムオブジェクトに組み込んだのち、`glLinkProgram()` で各シェーダオブジェクトをリンクします。
+
+バーテックスシェーダとフラグメントシェーダのシェーダオブジェクトの作成手順は同じですから、ソースプログラムをコンパイルしてシェーダオブジェクトを作成し、プログラムオブジェクトに組み込む関数を作ります。この関数も他のところから使用されないので、`static` にしておきます。
+
+```cpp
+///
+/// シェーダオブジェクトを作成してプログラムオブジェクトに組み込む
+///
+/// @param program シェーダオブジェクトを組み込むプログラムオブジェクトの名前
+/// @param src シェーダのソースプログラムの文字列
+/// @param msg メッセージに追加する文字列
+/// @param type シェーダの種類（GL_VERTEX_SHADER, GL_FRAGMENT_SHADER, GL_COMPUTE_SHADER）
+/// @return シェーダオブジェクトの作成とプログラムオブジェクトへの組み込みに成功したら true
+///
+static auto createShader(GLuint program, const std::string& src, const std::string& msg,
+  GLenum type) -> bool
+{
+  // プログラムオブジェクトが作成できていなかったら
+  if (program == 0)
+  {
+    // エラーメッセージを表示して戻る
+    std::cerr << "Error: Could not create program object." << std::endl;
+    return false;
+  }
+
+  // シェーダオブジェクトを作成する
+  const auto shader{ glCreateShader(type) };
+
+  // シェーダオブジェクトが作成できなかったら
+  if (shader == 0)
+  {
+    // エラーメッセージを表示して戻る
+    std::cerr << "Error: Could not create shader object." << std::endl;
+    return false;
+  }
+
+  // シェーダオブジェクトにソースプログラムの文字列を設定してコンパイルする
+  auto ptr{ src.c_str() };
+  glShaderSource(shader, 1, &ptr, nullptr);
+  glCompileShader(shader);
+
+  // コンパイル時のメッセージを表示してコンパイル結果を得る
+  const auto status{ printShaderInfoLog(shader, msg) != GL_FALSE };
+
+  // エラーが無ければシェーダオブジェクトをプログラムオブジェクトに組み込む
+  if (status) glAttachShader(program, shader);
+
+  // シェーダオブジェクトに削除マークを付ける
+  glDeleteShader(shader);
+
+  // コンパイル結果を返す
+  return status;
+}
+```
+
+### 5.6 プログラムオブジェクトを作成する関数
+
+`createProgram()` はバーテックスシェーダとフラグメントシェーダの両方のソースプログラムを受け取ってコンパイル・リンクし、プログラムオブジェクトを作成します。このリンクの際、フラグメントシェーダのプログラムオブジェクトは必ずしも必要ありません。これは Transform Feedback などで `glEnable(GL_RASTERIZER_DISCARD)` としてラスタライザを無効にしたときに、フラグメントシェーダが不要になるためです。そのため、フラグメントシェーダのソースプログラムが空文字列のときは、バーテックスシェーダのシェーダオブジェクトだけをリンクするようにしています。
+
+```cpp
+///
+/// プログラムオブジェクトを作成する
+///
+/// @param[in] vsrc バーテックスシェーダのソースプログラムの文字列
+/// @param[in] fsrc フラグメントシェーダのソースプログラムの文字列
+/// @param[in] vmsg バーテックスシェーダのコンパイル時のメッセージに追加する文字列
+/// @param[in] fmsg フラグメントシェーダのコンパイル時のメッセージに追加する文字列
+/// @return 作成したプログラムオブジェクトの名前、作成できなかった場合は 0
+///
+/// @note この関数は、
+/// バーテックスシェーダとフラグメントシェーダの両方のソースプログラムを受け取りますが、
+/// フラグメントシェーダのソースプログラムは空文字列でも構いません。
+/// これは Transform Feedback を使用する場合などで、
+/// glEnable(GL_RASTERIZER_DISCARD) としてラスタライザを無効にしたときには、
+/// フラグメントシェーダが不要になるためです。
+/// なお、バーテックスシェーダのソースプログラムがコンパイルエラーになった場合は、
+/// フラグメントシェーダのコンパイルは行いません。
+///
+auto createProgram(const std::string& vsrc, const std::string& fsrc,
+  const std::string& vmsg, const std::string& fmsg) -> GLuint
+{
+  // バーテックスシェーダのソースの文字列が与えられていなければ
+  if (vsrc.empty())
+  {
+    // エラーメッセージを表示して 0 を返す
+    std::cerr << "Error: No vertex shader specified." << std::endl;
+    return 0;
+  }
+
+  // 空のプログラムオブジェクトを作成する
+  const auto program{ glCreateProgram() };
+
+  // バーテックスシェーダの作成と組み込みに成功したら
+  if (createShader(program, vsrc, vmsg, GL_VERTEX_SHADER))
+  {
+    // フラグメントシェーダがないかフラグメントシェーダの作成と組み込みに成功したら
+    if (fsrc.empty() || createShader(program, fsrc, fmsg, GL_FRAGMENT_SHADER))
+    {
+      // プログラムオブジェクトをリンクして
+      glLinkProgram(program);
+
+      // エラーがなければプログラムオブジェクトを返す
+      if (printProgramInfoLog(program)) return program;
+    }
+  }
+
+  // エラーのときはプログラムオブジェクトを削除して 0 を返す
+  glDeleteProgram(program);
+  return 0;
+}
+```
+
+### 5.7 ソースファイルを読み込む関数
+
+`glCompileShader()` は `glShaderSource()` により文字列として与えられたソースプログラムを読み込んでコンパイルします。また、これらを使って定義した `createProgram()` も、ソースプログラムを文字列で受け取ります。これは、シェーダのソースプログラムを C++ のソースプログラム中に文字列として埋め込む場合は問題ないのですが、それだとシェーダだけを書き換えていろいろ試したい場合には、書き換えるたびにプログラムのビルドが必要になって不便です。
+
+そこで、シェーダのソースプログラムを外部のテキストファイルに書いて、それをプログラムの実行時に読み込んで使うようにします。ソースファイルの読み込みに使う関数は、例えば次のようなものです。この関数も他のところから使用されないので、`static` にしておきます。
+
+```cpp
+///
+/// シェーダのソースファイルを読み込む
+///
+/// @param[in] name シェーダのソースファイル名
+/// @return 読み込んだソースファイルの文字列、読み込めなければ ""
+///
+static auto readShaderSource(const std::string& name) -> std::string
+{
+  // ソースファイルを開く
+  std::ifstream file(name, std::ios::binary);
+
+  // ソースファイルが開けなかったら
+  if (file.fail())
+  {
+    // エラーメッセージを表示してから読み込み失敗として戻る
+    std::cerr << "Error: Can't open source file: " << name << std::endl;
+    return "";
+  }
+
+  // ファイル全体を読み込む
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+
+  // 読み込みエラーが起きていたら
+  if (file.fail())
+  {
+    // エラーメッセージを表示してから読み込み失敗として戻る
+    std::cerr << "Error: Can't read source file: " << name << std::endl;
+    return "";
+  }
+
+  // 読み込んだ文字列を返す（file はデストラクタで自動的に閉じられる）
+  return buffer.str();
+}
+```
+
+### 5.8 シェーダのソースファイルを読み込んでプログラムオブジェクトを作成する関数
+
+以上の関数を使って、外部のソースファイルを読み込んで、プログラムオブジェクトを作成します。
+
+```cpp
+///
+/// シェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] vert バーテックスシェーダのソースファイル名
+/// @param[in] frag フラグメントシェーダのソースファイル名
+/// @return 作成したプログラムオブジェクトの名前、作成できなかった場合は 0
+///
+auto loadProgram(const std::string& vert, const std::string& frag) -> GLuint
+{
+  // バーテックスシェーダのソースファイル名が与えられていなければ
+  if (vert.empty())
+  {
+    // エラーメッセージを表示して 0 を返す
+    std::cerr << "Error: No shader source file specified." << std::endl;
+    return 0;
+  }
+
+  // バーテックスシェーダのソースファイルを読み込む
+  const std::string vsrc{ readShaderSource(vert) };
+
+  // バーテックスシェーダのソースファイルが読み込めなければ 0 を返す
+  if (vsrc.empty()) return 0;
+
+  // フラグメントシェーダのソースの文字列（初期値は empty）
+  std::string fsrc;
+
+  // フラグメントシェーダのソースファイル名が指定されていたら
+  if (!frag.empty())
+  {
+    // フラグメントシェーダのソースファイルを読み込んで
+    fsrc = readShaderSource(frag);
+
+    // 読み込めていなかったら 0 を返す
+    if (fsrc.empty()) return 0;
+  }
+
+  // プログラムオブジェクトを作成する
+  return createProgram(vsrc, fsrc, vert, frag);
+}
+```
+
+### 5.9 shader.h の作成
+
+shader.cpp で定義した関数を他のソースファイルのプログラムから参照するときに使うヘッダファイルを作成します。の作成と同様に、「プロジェクト」メニューから「新しい項目の追加(W)...」を選び、shader.h というファイルを作成します。これに以下の内容を追加します。
+
+```cpp
+// シェーダ関連の宣言は gl.h に含まれていないので glew.h を使う
+#include <GL/glew.h>
+
+// 標準ライブラリ
+#include <string>
+
+///
+/// プログラムオブジェクトを作成する
+///
+/// @param[in] vsrc バーテックスシェーダのソースプログラムの文字列
+/// @param[in] fsrc フラグメントシェーダのソースプログラムの文字列
+/// @param[in] vert バーテックスシェーダのコンパイル時のメッセージに追加する文字列
+/// @param[in] frag フラグメントシェーダのコンパイル時のメッセージに追加する文字列
+/// @return 作成したプログラムオブジェクトの名前、作成できなかった場合は 0
+///
+extern auto createProgram(const std::string& vsrc, const std::string& fsrc,
+  const std::string& vert = "vertex shader", const std::string& frag = "fragment shader") -> GLuint;
+
+///
+/// シェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] vert バーテックスシェーダのソースファイル名
+/// @param[in] frag フラグメントシェーダのソースファイル名
+/// @return 作成したプログラムオブジェクトの名前、作成できなかった場合は 0
+///
+extern auto loadProgram(const std::string& vert, const std::string& frag) -> GLuint;
+```
+
+## [ステップ 05](https://github.com/tokoik/particle/blob/step05/README.md)
