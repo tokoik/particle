@@ -901,3 +901,64 @@ extern auto loadProgram(const std::string& vert, const std::string& frag) -> GLu
 ```
 
 ## [ステップ 05](https://github.com/tokoik/particle/blob/step05/README.md)
+
+## 6. シェーダのソースプログラム
+
+Visual Studio を使って、バーテックスシェーダのソースファイル point.vert と、フラグメントシェーダのソースファイル point.frag を作成します。
+
+### 6.1 バーテックスシェーダ
+
+「プロジェクト(P)」メニューの「新しい項目の追加(W)...」を選び、ファイル名に point.vert を指定してください。".vert" という拡張子のファイルは Visual Studio のテンプレートにないので、ファイル名は拡張子まで指定してください。このファイルでは、頂点の位置 `position` にモデルビュー投影変換行列 `mc` をかけて `gl_Position` に代入します。
+
+```glsl
+#version 430 core
+
+// 頂点の位置
+layout (location = 0) in vec4 position;
+
+// モデルビュー投影変換行列
+uniform mat4 mc;
+
+void main()
+{
+  // 頂点の位置をクリッピング座標系に変換する
+  gl_Position = mc * position;
+}
+```
+
+### 6.2 フラグメントシェーダ
+
+フ「プロジェクト(P)」メニューの「新しい項目の追加(W)...」を選び、ファイル名に point.frag を指定してください。".frag" という拡張子のファイルは Visual Studio のテンプレートにないので、ファイル名は拡張子まで指定してください。このファイルでは、そのフラグメントの色 `vec4(1.0)` すなわち白色を、フラグメントの色の `out` 変数 `color` に代入します。
+
+```glsl
+#version 430 core
+
+// フラグメントの色
+layout (location = 0) out vec4 color;
+
+void main()
+{
+  // フラグメントの色として白色を出力する
+  color = vec4(1.0);
+}
+```
+
+### 6.3 シェーダのソースファイルのプロジェクトへの組み込み
+
+シェーダのソースファイルはプロジェクトファイルと同じフォルダに入れて置くだけで構わないのですが、Visual Studio から編集しやすいように、プロジェクトのソリューションエクスプローラーに登録します。ソリューションエクスプローラーでプロジェクト名 (particle) を選択した後、右クリックして現れるポップアップメニューか「プロジェクト(P)」メニューの「新しいフィルター(F)」を選んでください。
+
+![新しいフィルター](images/fig15.png)
+
+フィルターの名前は「シェーダー ファイル」のようなものにしておきます。
+
+![フィルターの名前](images/fig16.png)
+
+作成したフォルダ（シェーダー ファイル）に point.vert と point.frag をドラッグ＆ドロップするか、このフォルダを選択した状態で「プロジェクト(P)」のメニューから「既存の項目の追加(G)...」を選択して、point.vert と point.frag を選択してください。
+
+![既存の項目の追加](images/fig17.png)
+
+point.vert と point.frag がソリューションエクスプローラーの「シェーダー ファイル」の中に入ります。
+
+![シェーダー ファイルの内容](images/fig18.png)
+
+## [ステップ 06](https://github.com/tokoik/particle/blob/step06/README.md)

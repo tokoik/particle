@@ -128,9 +128,11 @@
   <ItemGroup>
     <ClCompile Include="errorcheck.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="shader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="errorcheck.h" />
+    <ClInclude Include="shader.h" />
     <ClInclude Include="Window.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
