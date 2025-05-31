@@ -124,6 +124,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="point.frag" />
+    <None Include="point.vert" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="errorcheck.cpp" />
