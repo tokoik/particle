@@ -962,3 +962,153 @@ point.vert と point.frag がソリューションエクスプローラーの「
 ![シェーダー ファイルの内容](images/fig18.png)
 
 ## [ステップ 06](https://github.com/tokoik/particle/blob/step06/README.md)
+
+## 7. 図形関連の処理
+
+図形関連の処理を行う `Object` という構造体を追加します。クラスにせずに構造体にするのは、メンバ変数が `const` で読み取りしか行わないため、`private` にする理由があまりないと考えたからです。このあたりは、それでもクラスにしてメンバを `public` にすべきだという考え方もありますので、どっちにするかは任せます。
+
+### 7.1 Object.h の作成
+
+`Object` 構造体を定義するヘッダファイルを作成します。「プロジェクト」メニューから「新しい項目の追加(W)...」を選んで Object.h というファイルを作成します。このファイルでも最初に GL/glew.h を `#include` します。また GLM/glm.hpp も `#include` します。
+
+```cpp
+#pragma once
+
+// バッファオブジェクト関連の宣言は gl.h に含まれていないので glew.h を使う
+#include <GL/glew.h>
+
+// GLM 関連
+#if !defined(_USE_MATH_DEFINES)
+#  define _USE_MATH_DEFINES
+#endif
+#if !defined(GLM_FORCE_RADIANS)
+#  define GLM_FORCE_RADIANS
+#endif
+#include <GLM/glm.hpp>
+```
+
+メンバには頂点配列オブジェクトの名前（番号）を保持する `vao` と、それに組み込む頂点バッファオブジェクトの名前を保持する `vbo`、および頂点バッファオブジェクトに格納した頂点の数 `count` を追加します。これらは一度作成すしたら変更することはないので、`const` にしておきます。
+
+```cpp
+///
+/// 頂点配列オブジェクト
+///
+struct Object
+{
+  /// 頂点配列オブジェクト名
+  const GLuint vao;
+
+  /// 頂点バッファオブジェクト名
+  const GLuint vbo;
+
+  /// 頂点の数
+  const GLsizei count;
+```
+
+コンストラクタでは `vao` と `vbo` を作成します。引数は `vbo` に格納する頂点の数 `count` と、そこに最初に格納するデータを指すポインタ `data` です。`Window` クラスと同じ理由で、コピーコンストラクタと代入演算子は削除しておきます。
+
+```cpp
+  ///
+  /// コンストラクタ
+  ///
+  /// @param[in] count 頂点の数
+  /// @param[in] data データ
+  ///
+  Object(GLsizei count, const void* data = nullptr);
+
+  // コピーコンストラクタは使用しない
+  Object(const Object& object) = delete;
+
+  // ムーブコンストラクタはデフォルトのものを使用する
+  Object(Object&& object) = default;
+
+  ///
+  /// デストラクタ
+  ///
+  virtual ~Object();
+
+  // 代入演算子は使用しない
+  Object& operator=(const Object& object) = delete;
+
+  // ムーブ代入演算子はデフォルトのものを使用する
+  Object& operator=(Object&& object) = default;
+};
+```
+
+### 7.2 Object.cpp の作成
+
+「プロジェクト」メニューから「新しい項目の追加(W)...」を選んで Object.cpp というファイルを作成し、そこに `Object` 構造体のコンストラクタを定義します。コンストラクタでは、頂点データを格納する頂点バッファオブジェクトを組み込んだ頂点配列オブジェクトを作成します。この手順は次のようになります。
+
+1. `glGenVertexArrays()` を使って、頂点配列オブジェクトを一つ作り、メンバ変数 `vao` に名前を格納します。
+2. 次に `glGenBuffers()` を使って、頂点バッファオブジェクト `GL_ARRAY_BUFFER` を一つ作り、メンバ変数 `vbo` に名前を格納します。
+3. `glBindVertexArray()` を使って、作った頂点配列オブジェクト `vao` を結合します。
+4. `glBindBuffer()` を使って、作った頂点バッファオブジェクト `vbo` を結合します。これで頂点バッファオブジェクトが頂点配列オブジェクトに組み込まれます。
+5. `glBufferData()` を使って、作った頂点配列オブジェクトに GPU 上のメモリを割り当てます。割り当てるメモリのサイズは、3 次元の点の座標値 (x, y, z) を点の数 `count` 個分です。 また、そこに引数 `position` の内容をコピーします。`position` が `nullptr` なら、データのコピーを行わずにメモリの確保だけを行います。
+
+この頂点バッファオブジェクトは、`glVertexAttribPointer()` を使って、読み取る際のインデックスに 0 を指定しておきます。これはバーテックスシェーダで `location` を 0 に設定した `in` 変数（attribute 変数）から読み取ることができます。また、個々の頂点データは要素数（次元）が 4 の `float` 型、すなわち `std::vec4` とします。その後、`glEnableVertexAttribArray()` を使って、インデックスが 0 の `vbo` からの読み取りを有効にします。頂点データを 3 要素の `std::vec3` ではなく 4 要素の `std::vec4` で表す理由は、後で説明するコンピュートシェーダが密に詰まった `std::vec3` 型のデータを扱えないからです（16 バイト境界に揃えられるため 4 バイト分の隙間が必要）。
+
+なお、`vao` と `vbo` はコンストラクタの初期化リストで初期化しています。しかし、`glGenVertexArrays()` や `glGenBuffers()` は、戻り値ではなくポインタを渡す引数経由でオブジェクト名（番号）を返すため、直接初期化リストで使うことができません。そこで、値を返す即時実行ラムダ式でこれらの関数を包むことで、初期化リスト内でオブジェクト名を生成してメンバ変数を初期化するというテクニックを使っています。
+
+```cpp
+///
+/// 図形関連の処理の実装
+///
+#include "Object.h"
+
+///
+/// コンストラクタ
+///
+/// @param[in] count 頂点の数
+/// @param[in] data データ
+///
+Object::Object(GLsizei count, const void* data) :
+
+  // 頂点配列オブジェクトを作成して vao を初期化する
+  vao{ []() { GLuint vao; glGenVertexArrays(1, &vao); return vao; }() },
+
+  // 頂点バッファオブジェクトを作成して vbo を初期化する
+  vbo{ []() { GLuint vbo; glGenBuffers(1, &vbo); return vbo; }() },
+
+  // 頂点の数を保存しておく
+  count{ count }
+{
+  // 頂点配列オブジェクトを結合する
+  glBindVertexArray(vao);
+
+  // 頂点バッファオブジェクトを結合して頂点配列オブジェクトに組み込む
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+
+  // 頂点バッファオブジェクトのメモリを確保して頂点の位置データを転送する
+  glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * count, data, GL_DYNAMIC_DRAW);
+
+  // 結合されている頂点バッファオブジェクトのインデックスを 0 番にする
+  glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+
+  // 0 番の頂点バッファオブジェクトを有効にする
+  glEnableVertexAttribArray(0);
+
+  // 頂点配列オブジェクトの結合を解除する
+  glBindVertexArray(0);
+
+  // 頂点バッファオブジェクトの結合を解除する
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+```
+
+デストラクタでは、作成した頂点配列オブジェクト `vao` と頂点バッファオブジェクト `vbo` を削除します。
+
+```cpp
+///
+/// デストラクタ
+///
+Object::~Object()
+{
+  // 頂点配列オブジェクトを削除する
+  glDeleteVertexArrays(1, &vao);
+
+  // 頂点バッファオブジェクトを削除する
+  glDeleteBuffers(1, &vbo);
+}
+```
+
+## [ステップ 07](https://github.com/tokoik/particle/blob/step07/README.md)
