@@ -1339,3 +1339,298 @@ auto main() -> int
 ![実行結果](images/fig19.png)
 
 ## [ステップ 08](https://github.com/tokoik/particle/blob/step08/README.md)
+
+## 9. オブジェクトの回転
+
+マウスのドラッグで図形をくるくる回転できるようにします。このような操作は「トラックボール」と呼ばれることがあります。この機能は `Window` クラスに実装しますので、Window.h を編集します。
+
+### 9.1 クォータニオンを使う
+
+回転の処理には、特にゲームやロボティクスでは、クォータニオン（四元数）という数を使います。GLM では、クォータニオンは `glm::quot`（数値の精度が `float` 型の場合）や `glm::dquot`（数値の精度が `double` 型の場合）というデータ型で扱うことができます。これらを使うために GLM/gtc/quaternion.hpp を `#include` します。また、配列のデータ型 `std::array` も使うので、array も `#include` します。
+
+```cpp
+// GLM 関連
+#define _USE_MATH_DEFINES
+#define GLM_FORCE_RADIANS
+#include <GLM/glm.hpp>
+#include <GLM/gtc/quaternion.hpp>
+
+// 標準ライブラリ
+#include <array>
+```
+
+### 9.2 マウスボタンを使う
+
+マウス操作に使うマウスボタンの識別子（番号）を格納する変数 `button` と現在のマウスカーソルの位置 `cursor` を、プライベートメンバに追加します。GLFW では整数値の 0 である `GLFW_MOUSE_BUTTON_0` から `GLFW_MOUSE_BUTTON_LAST` の、`GLFW_MOUSE_BUTTON_LAST + 1` 個のマウスボタンの識別子を扱うことができますから、`button` はどのボタンも押していないことを表す -1 で初期化します。
+
+また、マウスボタンを押した位置 `start`、マウスのドラッグによる回転を表すクォータニオンを格納する `rotation`、そしてクォータニオンの `rotation` から求めた回転の変換行列を格納する `model` を、それぞれ `GLFW_MOUSE_BUTTON_LAST + 1` 個の配列で用意します。このほか、ドラッグ中の回転を一時的に保持するクォータニオン `trackball` を用意します。
+
+```cpp
+///
+/// ウィンドウ関連の処理クラス
+///
+class Window
+{
+  /// ウィンドウの識別子
+  GLFWwindow* const window;
+
+  /// ウィンドウのサイズ
+  glm::dvec2 size;
+
+  /// 操作しているマウスボタン
+  int button{ -1 };
+
+  /// ボタンごとのマウスボタンを押した位置
+  std::array<glm::dvec2, GLFW_MOUSE_BUTTON_LAST + 1> start{};
+
+  /// ボタンごとの回転
+  std::array<glm::dquat, GLFW_MOUSE_BUTTON_LAST + 1> rotation{};
+
+  /// ボタンごとのモデル変換行列
+  std::array<glm::mat4, GLFW_MOUSE_BUTTON_LAST + 1> model{};
+
+  /// トラックボール処理の途中経過
+  glm::dquat trackball{};
+```
+
+### 9.3 マウスボタンを操作したときの処理
+
+`mouse()` というメソッドにマウスボタンを操作したときの処理を記述します。このメソッドもコールバック関数として使用しますので、`static` にします。しががって、このメソッドでも `resize()` と同様に、`glfwGetWindowUserPointer()` でウィンドウの識別子 `window` からインスタンスのポインタを取り出します。
+
+```cpp
+  ///
+  /// マウスボタンの操作時の処理
+  ///
+  /// @param[in] window マウスボタンの操作を受け付けるウィンドウの識別子
+  /// @param[in] button 押されたマウスボタンの識別子
+  /// @param[in] action マウスボタンの状態
+  /// @param[in] mods マウスボタンの状態に影響する修飾キー (Shift, Ctrl, Alt)
+  ///
+  /// @note glfwSetMouseButtonCallback() で登録するコールバック関数
+  ///
+  static void mouse(GLFWwindow* window, int button, int action, int mods)
+  {
+    // window が保持するインスタンスの this ポインタを得る
+    const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
+
+    // インスタンスからの呼び出しでなければ戻る
+    if (instance == nullptr) return;
+```
+
+そして、マウスボタンを押したときに、押したボタンの識別子と、その位置を保存します。また、マウスボタンを離したときには、マウスボタンの識別子としてどのボタンを押していないことを示す -1 を格納し、その時の回転のクォータニオンを保存します。
+
+```cpp
+    // マウスボタンを押していたら
+    if (action != GLFW_RELEASE)
+    {
+      // 押したマウスボタンを記録する
+      instance->button = button;
+
+      // ドラッグ開始時のカーソル位置を保存する
+      auto& cursor{ instance->start[button] };
+      glfwGetCursorPos(window, &cursor.x, &cursor.y);
+    }
+    else
+    {
+      // マウスボタンを離したことを記録する
+      instance->button = -1;
+
+      // ドラッグ終了時の回転を保存する
+      instance->rotation[button] = instance->trackball;
+    }
+  }
+```
+
+### 9.4 コンストラクタの修正
+
+コンストラクタでは、`glfwSetMouseButtonCallback()` でマウスボタンを操作したときに呼び出されるコールバック関数に `mouse()` を登録します。また、マウスのボタンごとの回転のクォータニオンを保持するメンバ変数 `rotation` と、それから求めた変換行列 `model` の初期化を行います。これは `reset()` というメソッドの呼び出しで行います。`reset()` は後で定義します。
+
+```cpp
+  ///
+  /// コンストラクタ
+  ///
+  /// @param[in] width ウィンドウの幅
+  /// @param[in] height ウィンドウの高さ
+  /// @param[in] title ウィンドウのタイトル
+  ///
+  Window(int width = 640, int height = 480, const char* title = "GLFW Window") :
+
+    // ウィンドウを生成して識別子を保存する
+    window{ glfwCreateWindow(width, height, title, nullptr, nullptr) },
+
+    // 開いたウィンドウのサイズを保存する
+    size{ width, height }
+  {
+    // ウィンドウが開けなければ戻る
+    if (window == nullptr) return;
+
+    // 現在のウィンドウを処理対象にする
+    glfwMakeContextCurrent(window);
+
+    // 表示はディスプレイのリフレッシュレートに同期させる
+    glfwSwapInterval(1);
+
+    // このインスタンスの this ポインタを記録しておく
+    glfwSetWindowUserPointer(window, this);
+
+    // マウスボタンの操作時に呼び出す処理を登録する
+    glfwSetMouseButtonCallback(window, mouse);
+
+    // 各種の状態の復帰処理を行う
+    reset();
+
+    // ウィンドウのサイズ変更時に呼び出す処理を登録する
+    glfwSetWindowSizeCallback(window, resize);
+
+    // 開いたウィンドウに初期設定を適用する
+    resize(window, width, height);
+  }
+```
+
+### 9.5 マウスの状態の更新処理
+
+`update()` は、いずれかのマウスのボタンが押されているときに `glfwGetCursorPos()` で現在のマウスカーソルの位置を取得し、これからマウスのボタンを押したときに保存したドラッグ開始点の位置を引いて、マウスの変位ベクトルを求めます。ただし、OpenGL のスクリーンの座標系は上方向が正なのに対して、マウスカーソルの座標系は下方向が正なので、変位ベクトルの上下は反転します。これをウィンドウのサイズで割って、ウィンドウの大きさにかかわらず `dx` および `dy` ともに ±1 の間の値になるようにします。
+
+また、この変位ベクトルの長さを角度に用い、変位の方向に直交する方向を回転軸に用いて回転のクォータニオンを決定して、`trackball` に保存します。また、このクォータニオンの回転の変換行列も `model` に求めておきます。
+
+```cpp
+  ///
+  /// 更新処理
+  ///
+  auto update() -> void
+  {
+    // マウスのいずれのボタンも押されていなければ何もしない
+    if (button < GLFW_MOUSE_BUTTON_LEFT) return;
+
+    // マウスの現在位置を取り出す
+    double x, y;
+    glfwGetCursorPos(window, &x, &y);
+
+    // マウスの相対変位
+    const auto dx{ (x - start[button].x) / size.x };
+    const auto dy{ (start[button].y - y) / size.y };
+
+    // マウスポインタの位置のドラッグ開始位置からの距離
+    const auto length{ hypot(dx, dy) };
+
+    // マウスポインタの位置がドラッグ開始位置から移動していれば何もしない
+    if (length == 0.0) return;
+
+    // マウスの移動方向と直交するベクトルを回転軸にする
+    const auto axis{ glm::normalize(glm::dvec3(-dy, dx, 0.0)) };
+
+    // マウスの移動量を回転角とした回転を現在の回転と合成する
+    trackball = glm::angleAxis(length * M_PI, axis) * rotation[button];
+
+    // 合成した回転の四元数から回転の変換行列を求める
+    model[button] = glm::mat4_cast(static_cast<glm::quat>(trackball));
+  }
+```
+
+これを main.cpp のループの内部の最初の部分で呼び出します。この位置は `while (window)` によって `operator bool()` が呼び出され、`glfwPollEvents()` でイベントが取り出された直後なので、描画や `glfwSwapBuffers()` による遅延の影響を受けることなく、マウスの操作に対応した処理を行うことができます。
+
+```cpp
+  // 背景色を指定する
+  glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
+
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // 更新処理を行う
+    window.update();
+
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+```
+
+### 9.6 マウスの状態の復帰処理
+
+回転は累積しますので、最初にすべてのマウスボタンについて、回転のクォータニオン `rotation` を単位クォータニオン `glm::quat(1.0f, 0.0f, 0.0f, 0.0f)` で初期化し、それから求めた回転のモデル変換行列を格納する `model` を単位行列 `glm::mat4(1.0f)` で初期化する必要があります。この処理を行うメソッド `reset()` を定義します。
+
+```cpp
+  ///
+  /// 復帰処理
+  ///
+  auto reset() -> void
+  {
+    // 全てのボタンの回転を初期化する
+    std::fill(rotation.begin(), rotation.end(), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+
+    // 全てのボタンのモデル変換行列を初期化する
+    std::fill(model.begin(), model.end(), glm::mat4(1.0f));
+  }
+```
+
+### 9.7 モデル変換行列の取り出し
+
+このモデル変換行列 `model` を取り出すメソッド `getModel()` を追加します。ただし、このメソッドは `const` にしません。その理由は、後でこれにマウスホイールによる移動量をもとにメンバ変数の model を変更する処理を追加するからです。
+
+```cpp
+  ///
+  /// ウィンドウの縦横比を取り出す
+  ///
+  /// @return ウィンドウの縦横比
+  ///
+  auto getAspect() const
+  {
+    return static_cast<GLfloat>(size.x / size.y);
+  }
+
+  ///
+  /// モデル変換行列を取り出す
+  ///
+  /// @param[in] button マウスボタンの識別子
+  /// @return モデル変換行列
+  ///
+  const auto& getModel(int button)
+  {
+    // 指定したボタンに割り当てたモデル変換行列を返す
+    return model[button];
+  }
+};
+```
+
+### 9.8 モデル変換の組み込み
+
+モデル変換行列を `window.getModel()` で取り出して `model` に格納し、それを投影変換行列 `projection` とビュー変換行列 `view` の積に乗じます。 
+
+```cpp
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // 更新処理を行う
+    window.update();
+
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // プログラムオブジェクトを指定する
+    glUseProgram(program);
+
+    // モデル変換行列を設定する
+    const auto& model{ window.getModel(GLFW_MOUSE_BUTTON_LEFT) };
+
+    // ビュー変換行列を設定する
+    const auto view{ glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f)) };
+
+    // 投影変換行列を設定する
+    const auto projection{ glm::perspective(glm::radians(60.0f), window.getAspect(), 1.0f, 5.0f) };
+
+    // uniform 変数 mc に値を設定する
+    glUniformMatrix4fv(mcLoc, 1, GL_FALSE, glm::value_ptr(projection * view * model));
+
+    // 図形を指定する
+    glBindVertexArray(object.vao);
+
+    // 図形を描画する
+    glDrawArrays(GL_POINTS, 0, PARTICLE_COUNT);
+
+    // OpenGL のエラーが発生していないかチェックする
+    errorcheck();
+
+    // カラーバッファを入れ替えてイベントを取り出す
+    window.swapBuffers();
+  }
+```
+
+## [ステップ 09](https://github.com/tokoik/particle/blob/step09/README.md)
