@@ -15,6 +15,17 @@
 // OpenGL のエラーチェック
 #include "errorcheck.h"
 
+// シェーダの読み込み処理
+#include "shader.h"
+
+// 図形関連の処理
+#include "object.h"
+
+// OpenGL で用いる数学関数ライブラリ
+#include <GLM/glm.hpp>
+#include <GLM/gtc/type_ptr.hpp>
+#include <GLM/gtc/matrix_transform.hpp>
+
 // 標準ライブラリ
 #include <iostream>
 
