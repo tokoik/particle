@@ -21,6 +21,13 @@
 // 標準ライブラリ
 #include <array>
 
+// ImGui の組み込み
+#if defined(USE_IMGUI)
+#  include "imgui.h"
+#  include "imgui_impl_glfw.h"
+#  include "imgui_impl_opengl3.h"
+#endif
+
 ///
 /// ウィンドウ関連の処理クラス
 ///
@@ -65,6 +72,11 @@ class Window
   ///
   static void mouse(GLFWwindow* window, int button, int action, int mods)
   {
+#if defined(IMGUI_VERSION)
+    // ImGui がマウスを使うときは Window クラスのマウス位置を更新しない
+    if (ImGui::GetIO().WantCaptureMouse) return;
+#endif
+
     // window が保持するインスタンスの this ポインタを得る
     const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
 
@@ -101,6 +113,11 @@ class Window
   ///
   static void wheel(GLFWwindow* window, double x, double y)
   {
+#if defined(IMGUI_VERSION)
+    // ImGui がマウスを使うときは Window クラスのホイールの回転量を更新しない
+    if (ImGui::GetIO().WantCaptureMouse) return;
+#endif
+
     // window が保持するインスタンスの this ポインタを得る
     const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
 
@@ -228,8 +245,23 @@ public:
     // ウィンドウを閉じるなら false を返す
     if (glfwWindowShouldClose(window)) return false;
 
+#if defined(IMGUI_VERSION)
+    // ImGui の新規フレームを作成する
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+
+    // ImGui の状態を取り出す
+    const auto& io{ ImGui::GetIO() };
+
+    // ImGui がマウスを使うときは Window クラスのマウス位置を更新しない
+    if (io.WantCaptureMouse) return true;
+
+    // マウスの位置を更新する
+    cursor = { io.MousePos.x, io.MousePos.y };
+#else
     // マウスの現在位置を保存する
     glfwGetCursorPos(window, &cursor[0], &cursor[1]);
+#endif
 
     // いずれかのマウスボタンが押されていたら
     if (button >= GLFW_MOUSE_BUTTON_LEFT)
