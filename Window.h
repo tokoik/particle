@@ -25,6 +25,14 @@
 // 標準ライブラリ
 #include <array>
 
+// ImGui の組み込み
+#define USE_IMGUI true
+#if USE_IMGUI
+#  include "ImGui/imgui.h"
+#  include "ImGui/imgui_impl_glfw.h"
+#  include "ImGui/imgui_impl_opengl3.h"
+#endif
+
 ///
 /// ウィンドウ関連の処理クラス
 ///
@@ -66,6 +74,11 @@ class Window
   ///
   static void mouse(GLFWwindow* window, int button, int action, int mods)
   {
+#if defined(IMGUI_VERSION)
+    // ImGui がマウスを使うときは Window クラスのマウス位置を更新しない
+    if (ImGui::GetIO().WantCaptureMouse) return;
+#endif
+
     // window が保持するインスタンスの this ポインタを得る
     const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
 
@@ -103,6 +116,11 @@ class Window
   ///
   static void wheel(GLFWwindow* window, double x, double y)
   {
+#if defined(IMGUI_VERSION)
+    // ImGui がマウスを使うときは Window クラスのホイールの回転量を更新しない
+    if (ImGui::GetIO().WantCaptureMouse) return;
+#endif
+
     // window が保持するインスタンスの this ポインタを得る
     const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
 
@@ -230,8 +248,18 @@ public:
     // イベントを取り出す
     glfwPollEvents();
 
-    // ウィンドウを閉じないなら true を返す
-    return glfwWindowShouldClose(window) == GLFW_FALSE;
+    // ウィンドウを閉じるなら false を返す
+    if (glfwWindowShouldClose(window)) return false;
+
+#if defined(IMGUI_VERSION)
+    // ImGui の新規フレームを作成する
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+#endif
+
+    // 描画ループを継続する
+    return true;
   }
 
   ///
@@ -242,9 +270,20 @@ public:
     // マウスのいずれのボタンも押されていなければ何もしない
     if (button < GLFW_MOUSE_BUTTON_LEFT) return;
 
+#if defined(IMGUI_VERSION)
+    // ImGui の状態を取り出す
+    const auto& io{ ImGui::GetIO() };
+
+    // ImGui がマウスを使うときは Window クラスのマウス位置を更新しない
+    if (io.WantCaptureMouse) return;
+
+    // マウスの現在位置を取り出す
+    double x{ io.MousePos.x }, y{ io.MousePos.y };
+#else
     // マウスの現在位置を取り出す
     double x, y;
     glfwGetCursorPos(window, &x, &y);
+#endif
 
     // マウスの相対変位
     const auto dx{ (x - start[button].x) / size.x };
@@ -283,6 +322,13 @@ public:
   ///
   auto swapBuffers() const
   {
+#if defined(IMGUI_VERSION)
+    ImGui::Render();
+    // ImGui の描画データがあればフレームをレンダリングする
+    const auto data{ ImGui::GetDrawData() };
+    if (data) ImGui_ImplOpenGL3_RenderDrawData(data);
+#endif
+
     // カラーバッファを入れ替える
     glfwSwapBuffers(window);
   }

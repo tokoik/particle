@@ -137,6 +137,39 @@ auto main() -> int
     return EXIT_FAILURE;
   }
 
+#if defined(IMGUI_VERSION)
+  // ImGui のバージョンをチェックする
+  IMGUI_CHECKVERSION();
+
+  // ImGui のコンテキストを作成する
+  ImGui::CreateContext();
+
+  // ImGui のバックエンドに OpenGL / GLFW を使う
+  ImGui_ImplGlfw_InitForOpenGL(window.get(), true);
+  ImGui_ImplOpenGL3_Init();
+
+  // ImGui のスタイルを設定する
+  auto& io{ ImGui::GetIO() };
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+  //ImGui::StyleColorsDark();
+  //ImGui::StyleColorsClassic();
+
+  // 日本語を表示できるメニューフォントを読み込む
+  if (!io.Fonts->AddFontFromFileTTF("ImGui/Mplus1-Regular.ttf", 18,
+    nullptr, io.Fonts->GetGlyphRangesJapanese()))
+  {
+    // GLEW の初期化に失敗したのでエラーメッセージを出して
+    std::cerr << "Can't load menu font." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // メニューを表示するなら true
+  bool showMenu{ true };
+#endif
+
   // プログラムオブジェクトを作成する
   const auto program{ loadProgram("point.vert", "point.frag") };
 
@@ -192,9 +225,22 @@ auto main() -> int
     return EXIT_FAILURE;
   }
 
+  // 図形の種類
+  enum
+  {
+    Sphere = 0, // 球状
+    Box         // 箱状
+  };
+
+  // デフォルトの図形は球状
+  int shape{ Sphere };
+
+  // 図形のスケール
+  GLfloat scale{ 1.0f };
+
   // 図形を作成する
   Object object(PARTICLE_COUNT);
-  generateParticles(object, 1.0f);
+  generateParticles(object, scale, shape == Sphere);
 
   //
   // 粒子群の物理パラメータ
@@ -262,14 +308,60 @@ auto main() -> int
   glBufferData(GL_UNIFORM_BUFFER, sizeof physics, &physics, GL_DYNAMIC_DRAW);
   glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
+  // バーテックスシェーダで点の大きさを変えられるようにする
+  GLfloat distance[] = { 0.0, 0.0, 1.0 };
+  glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, distance);
+  glEnable(GL_POINT_SMOOTH);
+
   // 背景色を指定する
-  glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
+  glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
 
   // ウィンドウが開いている間繰り返す
   while (window)
   {
+#if defined(IMGUI_VERSION)
+    // メニューを表示するなら
+    if (showMenu)
+    {
+      // メニューを表示する
+      ImGui::SetNextWindowPos(ImVec2(2, 2), ImGuiCond_Once);
+      ImGui::SetNextWindowSize(ImVec2(308, 316), ImGuiCond_Once);
+      ImGui::Begin(u8"コントロールパネル", &showMenu);
+      ImGui::DragFloat3(u8"重力", &physics.gravity[0], 0.01f, -10.0f, 10.0f);
+      ImGui::DragFloat(u8"地面の高さ", &physics.floor_height, 0.01f, -10.0f, 10.0f);
+      ImGui::DragFloat(u8"地面の反発係数", &physics.floor_restitution, 0.01f, 0.0f, 1.0f);
+      ImGui::DragFloat(u8"粒子の反発係数", &physics.particle_restitution, 0.01f, 0.0f, 1.0f);
+      ImGui::DragFloat(u8"粒子の質量", &physics.mass, 0.01f, 0.01f, 10.0f);
+      ImGui::DragFloat(u8"粒子の半径", &physics.radius, 0.01f, 0.01f, 1.0f);
+      ImGui::DragFloat(u8"粒子の重なり", &physics.overlap, 0.0001f, 0.0f, 0.1f);
+      ImGui::SeparatorText(u8"図形の設定");
+      ImGui::InputFloat(u8"図形のスケール", &scale, 0.1f, 1.0f, "%.2f");
+      ImGui::RadioButton(u8"球", &shape, Sphere);
+      ImGui::SameLine();
+      ImGui::RadioButton(u8"箱", &shape, Box);
+      ImGui::SameLine();
+      if (ImGui::Button(u8"リセット")) generateParticles(object, scale, shape == Sphere);
+      ImGui::End();
+    }
+    else
+    {
+      // スペースをタイプしたらメニューを表示する
+      showMenu = glfwGetKey(window.get(), GLFW_KEY_SPACE) != GLFW_RELEASE;
+    }
+#endif
+
     // 更新処理を行う
     window.update();
+
+    // 点の大きさをウィンドウの高さに合わせる
+    glPointSize(static_cast<GLfloat>(window.getSize().y * 0.01));
+
+#if defined(IMGUI_VERSION)
+    // ユニフォームバッファオブジェクトに物理パラメータを書き込む
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof physics, &physics);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+#endif
 
     // シェーダストレージバッファオブジェクトを 0 番の結合ポイントに結合する
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, object.vbo);
@@ -331,4 +423,13 @@ auto main() -> int
     // カラーバッファを入れ替えてイベントを取り出す
     window.swapBuffers();
   }
+
+#if defined(IMGUI_VERSION)
+  // ImGui のバックエンドをシャットダウンする
+  ImGui_ImplGlfw_Shutdown();
+  ImGui_ImplOpenGL3_Shutdown();
+
+  // ImGui のコンテキストを破棄する
+  ImGui::DestroyContext();
+#endif
 }
