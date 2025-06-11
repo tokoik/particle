@@ -1592,7 +1592,7 @@ class Window
 
 ### 9.8 モデル変換の組み込み
 
-モデル変換行列を `window.getModel()` で取り出して `model` に格納し、それを投影変換行列 `projection` とビュー変換行列 `view` の積に乗じます。 
+モデル変換行列を `window.getModel()` で取り出して `model` に格納し、それを投影変換行列 `projection` とビュー変換行列 `view` の積にさらに乗じます。
 
 ```cpp
   // ウィンドウが開いている間繰り返す
@@ -1634,3 +1634,136 @@ class Window
 ```
 
 ## [ステップ 09](https://github.com/tokoik/particle/blob/step09/README.md)
+
+## 10. オブジェクトの移動
+
+マウスホイールの操作で図形を前後に移動できるようにします。この機能は `Window` クラスに実装しますので、Window.h を編集します。
+
+### 10.1 マウスホイールの回転量
+
+マウスホイールの回転量を保持するプライベートメンバ `scroll` を追加します。この初期値は 0 にします（"0.0, 0.0" を省略しても 0 になります）。GLFW では、マウスホイールの回転量は2次元で得られます。
+
+```cpp
+///
+/// ウィンドウ関連の処理クラス
+///
+class Window
+{
+  /// ウィンドウの識別子
+  GLFWwindow* const window;
+
+  // 中略
+
+  /// トラックボール処理の途中経過
+  glm::dquat trackball{};
+
+  /// マウスホイールの回転量
+  glm::dvec2 scroll{ 0.0, 0.0 };
+```
+
+### 10.2 マウスホイールを操作したときの処理
+
+`wheel()` というメソッドにマウスホイールを操作したときの処理を記述します。このメソッドもコールバック関数として使用しますので、`static` にします。しががって、このメソッドでも `resize()` と同様に `glfwGetWindowUserPointer()` でウィンドウの識別子 window からインスタンスのポインタを取り出します。
+
+このメソッドでは、引数で与えられたマウスホイールの回転量を、メンバ変数の `scroll` に加算します。したがって、`scroll` の初期値は 0 である必要があります。
+
+```cpp
+  ///
+  /// マウスホイールを操作した時の処理
+  ///
+  /// @param[in] window マウスホイールの操作を受け付けるウィンドウの識別子
+  /// @param[in] x マウスホイールの x 方向の回転量
+  /// @param[in] y マウスホイールの y 方向の回転量
+  ///
+  /// @note glfwSetScrollCallback() で登録するコールバック関数
+  ///
+  static void wheel(GLFWwindow* window, double x, double y)
+  {
+    // window が保持するインスタンスの this ポインタを得る
+    const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
+
+    // インスタンスからの呼び出しでなければ戻る
+    if (instance == nullptr) return;
+
+    // マウスホイールの回転量の保存
+    instance->scroll += glm::dvec2{ x, y };
+  }
+```
+
+### 10.3 コンストラクタの修正
+
+`glfwSetScrollCallback()` でマウスホイールを操作したときに呼び出されるコールバック関数に `wheel()` を登録します。
+
+```cpp
+  ///
+  /// コンストラクタ
+  ///
+  /// @param[in] width ウィンドウの幅
+  /// @param[in] height ウィンドウの高さ
+  /// @param[in] title ウィンドウのタイトル
+  ///
+  Window(int width = 640, int height = 480, const char* title = "GLFW Window") :
+
+    // ウィンドウを生成して識別子を保存する
+    window{ glfwCreateWindow(width, height, title, nullptr, nullptr) },
+
+    // 開いたウィンドウのサイズを保存する
+    size{ width, height }
+  {
+    // ウィンドウが開けなければ戻る
+    if (window == nullptr) return;
+
+    // 現在のウィンドウを処理対象にする
+    glfwMakeContextCurrent(window);
+
+    // 表示はディスプレイのリフレッシュレートに同期させる
+    glfwSwapInterval(1);
+
+    // このインスタンスの this ポインタを記録しておく
+    glfwSetWindowUserPointer(window, this);
+
+    // マウスホイールの操作時に呼び出す処理を登録する
+    glfwSetScrollCallback(window, wheel);
+
+    // マウスボタンの操作時に呼び出す処理を登録する
+    glfwSetMouseButtonCallback(window, mouse);
+
+    // 各種の状態の復帰処理を行う
+    reset();
+
+    // ウィンドウのサイズ変更時に呼び出す処理を登録する
+    glfwSetWindowSizeCallback(window, resize);
+
+    // 開いたウィンドウに初期設定を適用する
+    resize(window, width, height);
+  }
+```
+
+### 10.4 モデル変換行列の取り出し
+
+マウスボタンの `button` に割当てたモデル変換行列 `model[button]` を取り出す際に、その平行移動の x 成分 `model[button][3][0]` と z 成分 `model[button][3][2]` に、それぞれマウスの回転量の x 成分 `scroll.x` と y 成分 `scroll.y` を設定します。係数の 0.1 は自分で動作を試して、好みの値を設定してください。
+
+実は、この方法は少々トリッキーで、ちゃんと行列の積で表現しないとプログラムの可読性や保守性を損なうと指摘されることがあるかもしれません（されました）。また、この方法では、すべてのマウスボタンのモデル変換行列にマウスホイールによる同じ平行移動量が設定されてしまいます。これは特定のボタンのモデル変換行列に対してのみ行うようにした方がいいでしょう。
+
+なお、マウスホイールの回転は、多くのマウスでは y 方向しか取得できませんが、横スクロールの機能のあるマウスであれば、x 方向の回転量も得られます。
+
+```cpp
+  ///
+  /// モデル変換行列を取り出す
+  ///
+  /// @param[in] button マウスボタンの識別子
+  /// @return モデル変換行列
+  ///
+  const auto& getModel(int button)
+  {
+    // マウスホイールの回転量をモデル変換行列の平行移動量に設定する
+    model[button][3][0] = static_cast<float>(scroll.x * 0.1);
+    model[button][3][2] = static_cast<float>(scroll.y * 0.1);
+
+    // 指定したボタンに割り当てたモデル変換行列を返す
+    return model[button];
+  }
+};
+```
+
+## [ステップ 10](https://github.com/tokoik/particle/blob/step10/README.md)

@@ -20,6 +20,10 @@
 #  define GLM_FORCE_RADIANS
 #endif
 #include <GLM/glm.hpp>
+#include <GLM/gtc/quaternion.hpp>
+
+// 標準ライブラリ
+#include <array>
 
 ///
 /// ウィンドウ関連の処理クラス
@@ -31,6 +35,59 @@ class Window
 
   /// ウィンドウのサイズ
   glm::dvec2 size;
+
+  /// 操作しているマウスボタン
+  int button{ -1 };
+
+  /// ボタンごとのマウスボタンを押した位置
+  std::array<glm::dvec2, GLFW_MOUSE_BUTTON_LAST + 1> start{};
+
+  /// ボタンごとの回転
+  std::array<glm::dquat, GLFW_MOUSE_BUTTON_LAST + 1> rotation{};
+
+  /// ボタンごとのモデル変換行列
+  std::array<glm::mat4, GLFW_MOUSE_BUTTON_LAST + 1> model{};
+
+  /// トラックボール処理の途中経過
+  glm::dquat trackball{};
+
+  ///
+  /// マウスボタンの操作時の処理
+  ///
+  /// @param[in] window マウスボタンの操作を受け付けるウィンドウの識別子
+  /// @param[in] button 押されたマウスボタンの識別子
+  /// @param[in] action マウスボタンの状態
+  /// @param[in] mods マウスボタンの状態に影響する修飾キー (Shift, Ctrl, Alt)
+  ///
+  /// @note glfwSetMouseButtonCallback() で登録するコールバック関数
+  ///
+  static void mouse(GLFWwindow* window, int button, int action, int mods)
+  {
+    // window が保持するインスタンスの this ポインタを得る
+    const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
+
+    // インスタンスからの呼び出しでなければ戻る
+    if (instance == nullptr) return;
+
+    // マウスボタンを押していたら
+    if (action != GLFW_RELEASE)
+    {
+      // 押したマウスボタンを記録する
+      instance->button = button;
+
+      // ドラッグ開始時のカーソル位置を保存する
+      auto& cursor{ instance->start[button] };
+      glfwGetCursorPos(window, &cursor.x, &cursor.y);
+    }
+    else
+    {
+      // マウスボタンを離したことを記録する
+      instance->button = -1;
+
+      // ドラッグ終了時の回転を保存する
+      instance->rotation[button] = instance->trackball;
+    }
+  }
 
   ///
   /// ウィンドウのサイズ変更時の処理
@@ -91,6 +148,12 @@ public:
     // このインスタンスの this ポインタを記録しておく
     glfwSetWindowUserPointer(window, this);
 
+    // マウスボタンの操作時に呼び出す処理を登録する
+    glfwSetMouseButtonCallback(window, mouse);
+
+    // 各種の状態の復帰処理を行う
+    reset();
+
     // ウィンドウのサイズ変更時に呼び出す処理を登録する
     glfwSetWindowSizeCallback(window, resize);
 
@@ -145,6 +208,50 @@ public:
   }
 
   ///
+  /// 更新処理
+  ///
+  auto update() -> void
+  {
+    // マウスのいずれのボタンも押されていなければ何もしない
+    if (button < GLFW_MOUSE_BUTTON_LEFT) return;
+
+    // マウスの現在位置を取り出す
+    double x, y;
+    glfwGetCursorPos(window, &x, &y);
+
+    // マウスの相対変位
+    const auto dx{ (x - start[button].x) / size.x };
+    const auto dy{ (start[button].y - y) / size.y };
+
+    // マウスポインタの位置のドラッグ開始位置からの距離
+    const auto length{ hypot(dx, dy) };
+
+    // マウスポインタの位置がドラッグ開始位置から移動していれば何もしない
+    if (length == 0.0) return;
+
+    // マウスの移動方向と直交するベクトルを回転軸にする
+    const auto axis{ glm::normalize(glm::dvec3(-dy, dx, 0.0)) };
+
+    // マウスの移動量を回転角とした回転を現在の回転と合成する
+    trackball = glm::angleAxis(length * M_PI, axis) * rotation[button];
+
+    // 合成した回転の四元数から回転の変換行列を求める
+    model[button] = glm::mat4_cast(static_cast<glm::quat>(trackball));
+  }
+
+  ///
+  /// 復帰処理
+  ///
+  auto reset() -> void
+  {
+    // 全てのボタンの回転を初期化する
+    std::fill(rotation.begin(), rotation.end(), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+
+    // 全てのボタンのモデル変換行列を初期化する
+    std::fill(model.begin(), model.end(), glm::mat4(1.0f));
+  }
+
+  ///
   /// ダブルバッファリング
   ///
   auto swapBuffers() const
@@ -173,5 +280,17 @@ public:
   {
     // ウィンドウのサイズから縦横比を計算して返す
     return static_cast<GLfloat>(size.x / size.y);
+  }
+
+  ///
+  /// モデル変換行列を取り出す
+  ///
+  /// @param[in] button マウスボタンの識別子
+  /// @return モデル変換行列
+  ///
+  const auto& getModel(int button)
+  {
+    // 指定したボタンに割り当てたモデル変換行列を返す
+    return model[button];
   }
 };

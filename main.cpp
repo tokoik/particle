@@ -161,11 +161,17 @@ auto main() -> int
   // ウィンドウが開いている間繰り返す
   while (window)
   {
+    // 更新処理を行う
+    window.update();
+
     // ウィンドウを消去する
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // プログラムオブジェクトを指定する
     glUseProgram(program);
+
+    // モデル変換行列を設定する
+    const auto& model{ window.getModel(GLFW_MOUSE_BUTTON_LEFT) };
 
     // ビュー変換行列を設定する
     const auto view{ glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f)) };
@@ -174,7 +180,7 @@ auto main() -> int
     const auto projection{ glm::perspective(glm::radians(60.0f), window.getAspect(), 1.0f, 10.0f) };
 
     // uniform 変数 mc に値を設定する
-    glUniformMatrix4fv(mcLoc, 1, GL_FALSE, glm::value_ptr(projection * view));
+    glUniformMatrix4fv(mcLoc, 1, GL_FALSE, glm::value_ptr(projection * view * model));
 
     // 図形を指定する
     glBindVertexArray(object.vao);
