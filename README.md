@@ -327,3 +327,232 @@ public:
 ```
 
 ## [ステップ 03](https://github.com/tokoik/particle/blob/step03/README.md)
+
+## 4. OpenGL の処理
+
+GLFW と GLEW を使って OpenGL を使うアプリケーションを作成する基本的な手順を main.cpp に組み込みます。
+
+### 4.1 main.cpp の変更
+
+main.cpp を次のように書き換えます。まず、Windows の OpenGL のライブラリファイル openg32.lib をリンクする設定を埋め込みます。これは Visual Studio のプロジェクトの「設定」でも可能ですが、その手順を説明するのが面倒なので、`#pragma` を使ってソースプログラムに埋め込みます。その後、3. で作成した Window.h を `#include` します。
+
+`Window` クラスのオブジェクト `window` が真の間、描画ループを継続するようにします。
+
+```cpp
+// Windows の OpenGL ライブラリをリンクする
+#pragma comment(lib, "opengl32.lib")
+
+// ウィンドウ関連の処理
+#include "Window.h"
+
+// 標準ライブラリ
+#include <iostream>
+```
+
+メインプログラムでは、最初に `glfwInit()` で GLFW を初期化します。これが成功したら、プログラムの終了時に忘れずに `glfwTerminate()` を実行するように、これを `atexit()` で登録しておきます。
+
+```cpp
+///
+/// メインプログラム
+///
+/// @return プログラムが正常に終了した場合は 0
+///
+auto main() -> int
+{
+  // GLFW を初期化する
+  if (glfwInit() == GL_FALSE)
+  {
+    // GLFW の初期化に失敗したのでエラーメッセージを出して
+    std::cerr << "Can't initialize GLFW" << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // プログラム終了時の処理を登録する
+  atexit(glfwTerminate);
+```
+
+`Window` クラスのインスタンスを一つ生成し、ウィンドウを開きます。そのウィンドウの識別子を取り出し、`nullptr` でないことを確認します。
+
+```cpp
+  // ウィンドウを作成する
+  Window window;
+
+  // ウィンドウが作成できなかったら
+  if (window.get() == nullptr)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create GLFW window." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+```
+
+ウィンドウの作成に成功すれば、OpenGL の（レンダリング）コンテキストが作成されているので、`glewInit()` を呼び出して OpenGL の新しい機能を有効にします。なお、その前に `glewExperimental` という大域変数に `GL_TRUE` を代入しておき、すべての OpenGL の機能が使えるようにしておきます。
+
+```cpp
+  // GLEW の初期化時にすべての API のエントリポイントを見つけるようにして
+  glewExperimental = GL_TRUE;
+
+  // GLEW を初期化する
+  if (glewInit() != GLEW_OK)
+  {
+    // GLEW の初期化に失敗したのでエラーメッセージを出して
+    std::cerr << "Can't initialize GLEW" << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+```
+
+`glClear(GL_COLOR_BUFFER_BIT ...)` でウィンドウ内でクリアするときの色を `glClearColor()` で指定した後、ループの継続条件として `Window` クラスのインスタンスである `window` を論理コンテキストで評価します。ループ内では `glClear()` でカラーバッファとデプスバッファを消去した後、最後に `window.swapBuffers()` を呼び出して、カラーバッファの入れ替えをします。このときに、ループ内で発生したウィンドウサイズの変更やマウス・キーボード操作などのイベントの取り出しを行います。
+
+```cpp
+  // 背景色を指定する
+  glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
+
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // カラーバッファを入れ替えてイベントを取り出す
+    window.swapBuffers();
+  }
+}
+```
+
+### 4.2 エラーチェックの追加
+
+OpenGL のライブラリ関数、すなわち API (Application Program Interface) は、正しい設定や順序で呼び出さなければ、エラーが発生して期待した通りに動作しません。このエラーはプログラムの実行時に発生しますが、エラーメッセージなどは表示されないため、どこでどのようなエラーが発生しているのかを知るのは困難です。また、エラー発生やその内容は API の呼び出し直後に `glGetError()` を使って調べることができますが、 プログラム中の複数の場所にこの関数を置くと、どこに置いたものがエラーを検出したのかがわからなくなってしまいます。
+
+そこでマクロを使って、エラーが発生した場所を付加してエラーメッセージを表示するマクロ関数 `errorcheck()` を定義します。この関数はデバッグビルドの時だけ有効になるようにし、リリースビルドでは何もしないようにします。これは errorcheck.h というヘッダファイルに置きます。
+
+```cpp
+#pragma once
+
+#if defined(_DEBUG)
+///
+/// OpenGL のエラーをチェックする
+///
+/// @param[in] name エラー発生時に標準エラー出力に出力するファイル名などの文字列。nullptr なら何も出力しない。
+/// @oaram[in] line エラー発生時に標準エラー出力に出力する行番号などの整数値。
+///
+extern auto _errorcheck(const char* name, unsigned int line) -> void;
+
+///
+/// OpenGL のエラーの発生を検知したときにソースファイル名と行番号を表示する。
+///
+/// @def errorcheck()
+///
+/// @note このマクロを置いた場所（より前）で OpenGL のエラーが発生していた時に、
+/// このマクロを置いたソースファイル名と行番号を出力する。
+/// リリースビルド時には無視する。
+///
+#  define errorcheck() _errorcheck(__FILE__, __LINE__)
+#else
+#  define errorcheck()
+#endif
+```
+
+マクロ関数 `errorcheck()` が展開されて呼び出される実際の関数 `_errorcheck()` は、`glGetError()` の戻り値からエラーメッセージを生成し、引数に与えられたファイル名 `name` と行番号 `line` を付加して、標準エラー出力 `std::cerr` に出力します。
+
+```cpp
+// デバッグ用関数の定義
+#include "errorcheck.h"
+
+// デバッグモードのときだけ定義する
+#if defined(_DEBUG)
+
+// OpenGL の関数や定数の宣言
+#include <GL/glew.h>
+
+// エラーメッセージの出力用
+#include <iostream>
+
+///
+/// OpenGL のエラーをチェックする
+///
+/// @param[in] name エラー発生時に標準エラー出力に出力するファイル名などの文字列。nullptr なら何も出力しない。
+/// @oaram[in] line エラー発生時に標準エラー出力に出力する行番号などの整数値。
+///
+auto _errorcheck(const char* name, unsigned int line) -> void
+{
+  const GLenum error{ glGetError() };
+
+  if (error != GL_NO_ERROR)
+  {
+    if (name != nullptr && *name != '\0')
+    {
+      std::cerr << name;
+      if (line > 0) std::cerr << " (" << line << ")";
+      std::cerr << ": ";
+    }
+
+    switch (error)
+    {
+    case GL_INVALID_ENUM:
+      std::cerr << "An unacceptable value is specified for an enumerated argument" << std::endl;
+      break;
+    case GL_INVALID_VALUE:
+      std::cerr << "A numeric argument is out of range" << std::endl;
+      break;
+    case GL_INVALID_OPERATION:
+      std::cerr << "The specified operation is not allowed in the current state" << std::endl;
+      break;
+    case GL_OUT_OF_MEMORY:
+      std::cerr << "There is not enough memory left to execute the command" << std::endl;
+      break;
+    case GL_INVALID_FRAMEBUFFER_OPERATION:
+      std::cerr << "The specified operation is not allowed current frame buffer" << std::endl;
+      break;
+    default:
+      std::cerr << "An OpenGL error has occured: " << std::hex << std::showbase << error << std::endl;
+      break;
+    }
+  }
+}
+#endif
+```
+
+このヘッダファイルをエラーチェックを行うソースプログラム、ここでは main.cpp で `#include` します。
+
+```cpp
+// Windows の OpenGL ライブラリをリンクする
+#pragma comment(lib, "opengl32.lib")
+
+// ウィンドウ関連の処理
+#include "Window.h"
+
+// OpenGL のエラーチェック
+#include "errorcheck.h"
+
+// 標準ライブラリ
+#include <iostream>
+```
+
+実際にエラーチェックを行いたいところに `errorcheck()` を置きます。
+
+```cpp
+  // 背景色を指定する
+  glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
+
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // OpenGL のエラーが発生していないかチェックする
+    errorcheck();
+
+    // カラーバッファを入れ替えてイベントを取り出す
+    window.swapBuffers();
+  }
+}
+```
+
+## [ステップ 04](https://github.com/tokoik/particle/blob/step04/README.md)
