@@ -1287,7 +1287,7 @@ auto main() -> int
 
 ### 8.6 プログラムオブジェクトの指定
 
-描画に使用するシェーダのプログラムオブジェクトを指定します。また、現在のウィンドウのアスペクト比を使って投影 (プロジェクション) 変換行列 `projection` を求め、それに視野変換行列 `view` を乗じたものを、このプログラムオブジェクトの `uniform` 変数 `mc` に設定します。投影変換の画角は 60°、図形の描画範囲は -3±1 なので、更に ±1 の余裕を持たせて near = 1、far = 5 に設定します。
+描画に使用するシェーダのプログラムオブジェクトを指定します。また、現在のウィンドウのアスペクト比を使って投影 (プロジェクション) 変換行列 `projection` を求め、それに視野変換行列 `view` を乗じたものを、このプログラムオブジェクトの `uniform` 変数 `mc` に設定します。投影変換の画角は 60°、図形の描画範囲は -3±1 なので、さらに ±1 の余裕を持たせて near = 1、far = 5 に設定します。
 
 ```cpp
   // 背景色を指定する
@@ -1767,3 +1767,166 @@ class Window
 ```
 
 ## [ステップ 10](https://github.com/tokoik/particle/blob/step10/README.md)
+
+## 11. コンピュートシェーダの読み取り処理
+
+GPU に汎用の数値計算をさせる、いわゆる GPGPU (General Purpose GPU) を行うには、バーテックスシェーダで計算をして、ラスタライザを起動させずに Transform Feedback により out 変数から直接計算結果を取り出す方法や、フラグメントシェーダの出力をフレームバッファオブジェクトにするなど、いくつかの方法があります。コンピュートシェーダは、それらより汎用で、かつ GPU の並列性を活用できるプログラミング機能を提供します。
+
+詳しくは [床井研究室 - 粒子のレンダリング (2) ポイントの移動](https://marina.sys.wakayama-u.ac.jp/~tokoi/?date=20181018) や [床井研究室 - セパラブルフィルタ](https://marina.sys.wakayama-u.ac.jp/~tokoi/?date=20230604) あたりも参考にしてください。ここでは以前に作成した shader.cpp と shader.h に、コンピュートシェーダを作成する関数を追加します。
+
+### 11.1 shader.cpp の修正
+
+shader.cpp を開き、以下の内容を追加します。コンピュートシェーダは、単独でコンパイル・リンクします。
+
+```cpp
+///
+/// コンピュートシェーダのソースプログラムの文字列を読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] csrc コンピュートシェーダのソースプログラムの文字列
+/// @param[in] cmsg コンピュートシェーダのコンパイル時のメッセージに追加する文字列
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+auto createCompute(const std::string& csrc, const std::string& cmsg) -> GLuint
+{
+  // 空のプログラムオブジェクトを作成する
+  const auto program{ glCreateProgram() };
+
+  // コンピュートシェーダの作成と組み込みに成功したら
+  if (createShader(program, csrc, cmsg, GL_COMPUTE_SHADER))
+  {
+    // プログラムオブジェクトをリンクして
+    glLinkProgram(program);
+
+    // エラーがなければプログラムオブジェクトを返す
+    if (printProgramInfoLog(program)) return program;
+  }
+
+  // エラーのときはプログラムオブジェクトを削除して 0 を返す
+  glDeleteProgram(program);
+  return 0;
+}
+
+///
+/// コンピュートシェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] comp コンピュートシェーダのソースファイル名
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+auto loadCompute(const std::string& comp) -> GLuint
+{
+  // コンピュートシェーダのソースファイルを読み込んで
+  std::string csrc{ readShaderSource(comp) };
+
+  // ソースファイルが読めたらプログラムオブジェクトを作成する
+  if (!csrc.empty()) return createCompute(csrc, comp);
+
+  // ソースファイルが読めなかったので 0 を返す
+  return 0;
+}
+```
+
+### 11.2 shader.h の修正
+
+shader.h を開き、以下の内容を追加します。
+
+```cpp
+///
+/// コンピュートシェーダのソースプログラムの文字列を読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] csrc コンピュートシェーダのソースプログラムの文字列
+/// @param[in] cmsg コンピュートシェーダのコンパイル時のメッセージに追加する文字列
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+extern auto createCompute(const std::string& csrc, const std::string& cmsg) -> GLuint;
+
+///
+/// コンピュートシェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] comp コンピュートシェーダのソースファイル名
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+extern auto loadCompute(const std::string& comp) -> GLuint;
+```
+
+### 11.3 コンピュートシェーダ
+
+「プロジェクト(P)」メニューの「新しい項目の追加(W)...」を選び、ファイル名に update.comp を指定してください。".comp" という拡張子のファイルは Visual Studio のテンプレートにないので、ファイル名は拡張子まで指定してください。なお、バーテックシェーダでは `gl_Position` への代入が、フラグメントシェーダではフレームバッファに結びつけた `out` 変数への出力（もしくは `discard`）が必須でしたが、コンピュートシェーダでは「なにもしない」プログラムを書くことができます。これは、コンピュートシェーダが処理の対象（頂点や点群の一部分、画素や画像の一部分など）を自分で決めることができるからです。
+
+代わりに、対象を**協調して**処理するスレッド（並列処理における一つの処理単位）の数を指定します。このスレッドの集合を**ワークグループ**と言います。ワークグループのスレッドは3次元的に並べることができ、x、y、z 方向のスレッドの数を `layout` 文で指定します。`local_size_x = 1`、`local_size_y = 1`、`local_size_z = 1` とした場合、このコンピュートシェーダでは 1 × 1 × 1 = 1 個のスレッドが使用されます。
+
+なお、コンピュートシェーダを起動する際は、処理する対象全体（点群全体や画像全体など）に対して、このワークグループを3次元的に並べます。
+
+![スレッドとワークグループ](images/fig20.png)
+
+```glsl
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+}
+```
+
+### 11.4 コンピュートシェーダの起動
+
+レンダリング用のプログラムオブジェクトの作成と同様に、main.cpp でコンピュートシェーダのプログラムオブジェクトを作成します。
+
+```cpp
+  // プログラムオブジェクトを作成する
+  const auto program{ loadProgram("point.vert", "point.frag") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (program == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create program object." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // uniform 変数 mc の場所を取得する
+  const auto mcLoc{ glGetUniformLocation(program, "mc") };
+
+  // 粒子の位置を更新するコンピュートシェーダのプログラムオブジェクトを作成する
+  const auto update{ loadCompute("update.comp") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (update == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create update shader." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // 図形を作成する
+  Object object(PARTICLE_COUNT);
+```
+
+そして、実際にレンダリングする前か後で、コンピュートシェーダを起動します。コンピュートシェーダの起動には `glDispatchCompute()` を使用します。引数には起動するワークグループの x 方向、y 方向、z 方向の数を指定します。これが 1, 1, 1 なら 1 × 1 × 1 = 1 個のワークグループが起動されます。このコンピュートシェーダは 1 ワークグループあたり 1 スレッドを使用しますから、このコンピュートシェーダは同時に一つだけ実行されることになります。
+
+```cpp
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // 更新処理を行う
+    window.update();
+
+    // 粒子の位置を更新するコンピュートシェーダを指定する
+    glUseProgram(update);
+
+    // 計算を実行する
+    glDispatchCompute(1, 1, 1);
+
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // プログラムオブジェクトを指定する
+    glUseProgram(program);
+```
+
+でも、このプログラムを実行しても、まだ何も変わりません。
+
+## [ステップ 11](https://github.com/tokoik/particle/blob/step11/README.md)

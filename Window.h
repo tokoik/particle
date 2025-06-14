@@ -51,6 +51,9 @@ class Window
   /// トラックボール処理の途中経過
   glm::dquat trackball{};
 
+  /// マウスホイールの回転量
+  glm::dvec2 scroll{ 0.0, 0.0 };
+
   ///
   /// マウスボタンの操作時の処理
   ///
@@ -87,6 +90,27 @@ class Window
       // ドラッグ終了時の回転を保存する
       instance->rotation[button] = instance->trackball;
     }
+  }
+
+  ///
+  /// マウスホイールを操作した時の処理
+  ///
+  /// @param[in] window マウスホイールの操作を受け付けるウィンドウの識別子
+  /// @param[in] x マウスホイールの x 方向の回転量
+  /// @param[in] y マウスホイールの y 方向の回転量
+  ///
+  /// @note glfwSetScrollCallback() で登録するコールバック関数
+  ///
+  static void wheel(GLFWwindow* window, double x, double y)
+  {
+    // window が保持するインスタンスの this ポインタを得る
+    const auto instance{ static_cast<Window*>(glfwGetWindowUserPointer(window)) };
+
+    // インスタンスからの呼び出しでなければ戻る
+    if (instance == nullptr) return;
+
+    // マウスホイールの回転量の保存
+    instance->scroll += glm::dvec2{ x, y };
   }
 
   ///
@@ -147,6 +171,9 @@ public:
 
     // このインスタンスの this ポインタを記録しておく
     glfwSetWindowUserPointer(window, this);
+
+    // マウスホイールの操作時に呼び出す処理を登録する
+    glfwSetScrollCallback(window, wheel);
 
     // マウスボタンの操作時に呼び出す処理を登録する
     glfwSetMouseButtonCallback(window, mouse);
@@ -290,6 +317,10 @@ public:
   ///
   const auto& getModel(int button)
   {
+    // マウスホイールの回転量をモデル変換行列の平行移動量に設定する
+    model[button][3][0] = static_cast<float>(scroll.x * 0.1);
+    model[button][3][2] = static_cast<float>(scroll.y * 0.1);
+
     // 指定したボタンに割り当てたモデル変換行列を返す
     return model[button];
   }
