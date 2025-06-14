@@ -126,6 +126,7 @@
     <None Include="packages.config" />
     <None Include="point.frag" />
     <None Include="point.vert" />
+    <None Include="update.comp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="errorcheck.cpp" />

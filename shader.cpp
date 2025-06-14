@@ -253,3 +253,48 @@ auto loadProgram(const std::string& vert, const std::string& frag) -> GLuint
   // プログラムオブジェクトを作成する
   return createProgram(vsrc, fsrc, vert, frag);
 }
+
+///
+/// コンピュートシェーダのソースプログラムの文字列を読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] csrc コンピュートシェーダのソースプログラムの文字列
+/// @param[in] cmsg コンピュートシェーダのコンパイル時のメッセージに追加する文字列
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+auto createCompute(const std::string& csrc, const std::string& cmsg) -> GLuint
+{
+  // 空のプログラムオブジェクトを作成する
+  const auto program{ glCreateProgram() };
+
+  // コンピュートシェーダの作成と組み込みに成功したら
+  if (createShader(program, csrc, cmsg, GL_COMPUTE_SHADER))
+  {
+    // プログラムオブジェクトをリンクして
+    glLinkProgram(program);
+
+    // エラーがなければプログラムオブジェクトを返す
+    if (printProgramInfoLog(program)) return program;
+  }
+
+  // エラーのときはプログラムオブジェクトを削除して 0 を返す
+  glDeleteProgram(program);
+  return 0;
+}
+
+///
+/// コンピュートシェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] comp コンピュートシェーダのソースファイル名
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+auto loadCompute(const std::string& comp) -> GLuint
+{
+  // コンピュートシェーダのソースファイルを読み込んで
+  std::string csrc{ readShaderSource(comp) };
+
+  // ソースファイルが読めたらプログラムオブジェクトを作成する
+  if (!csrc.empty()) return createCompute(csrc, comp);
+
+  // ソースファイルが読めなかったので 0 を返す
+  return 0;
+}

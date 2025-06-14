@@ -1930,3 +1930,70 @@ void main()
 でも、このプログラムを実行しても、まだ何も変わりません。
 
 ## [ステップ 11](https://github.com/tokoik/particle/blob/step11/README.md)
+
+## 12. コンピュートシェーダで粒子を動かす
+
+コンピュートシェーダを使って頂点の位置を変更して、粒子を動かしてみましょう。
+
+### 12.1 シェーダストレージバッファオブジェクトの準備
+
+頂点の位置データは `vbo` に入っていますから、これをコンピュートシェーダで読み書きするために、main.cpp で `glBindBufferBase()` を使ってシェーダストレージバッファオブジェクト (Shader Storage Buffer Object, SSBO) として結合します。この第 2 引数の 0 は結合ポイント (Binding Point) で、この番号はコンピュートシェーダで処理するシェーダストレージバッファオブジェクトを指定するのに使います。
+
+その後に `glDispatchCompute()` によりコンピュートシェーダを起動します。起動するワークグループの数は x 方向に粒子数 `object.count` 分とります。y 方向と z 方向が 1 なので、このワークグループは x 方向に 1 次元に並べた形になります。
+
+![粒子の数だけワークグループを起動する](images/fig21.png)
+
+```cpp
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // 更新処理を行う
+    window.update();
+
+    // シェーダストレージバッファオブジェクトを 0 番の結合ポイントに結合する
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, object.vbo);
+
+    // 粒子の位置を更新するコンピュートシェーダを指定する
+    glUseProgram(update);
+
+    // 計算を実行する
+    glDispatchCompute(object.count, 1, 1);
+
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // プログラムオブジェクトを指定する
+    glUseProgram(program);
+```
+
+### 12.2 シェーダストレージバッファオブジェクトからコンピュートシェーダへのデータ入力
+
+コンピュートシェーダ update.comp では、`layout` 文を使って、シェーダストレージバッファオブジェクトと変数を結びつけます。`std430` はシェーダストレージバッファオブジェクトのメモリレイアウトを C 言語や C++ 言語などに合わせることを指定します。`binding` は使用するシェーダストレージバッファオブジェクトの結合ポイントで、`glBindBufferBase()` で指定したものを指定します。その後の `{` ... `}` 内にシェーダストレージバッファオブジェクトの参照に使う変数を宣言します。この変数のメモリレイアウトは、結びつけるシェーダストレージバッファオブジェクトの元の `vbo` のメモリレイアウトと一致させる必要があります。
+
+```glsl
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+// 粒子群データ
+layout(std430, binding = 0) buffer Particles
+{
+  vec4 position[];
+};
+```
+
+個々のワークグループは、ワークグループのサイズ分のスレッドを使用します。それが `glDispatchCompute()` の引数で指定したワークグループの数だけ起動されます。その際、個々のスレッドに割り当てられたワークグループの番号が組み込み変数の `gl_WorkGroupID` に、一つのワークグループの中でのスレッドの位置が組み込み変数の `gl_LocalInvocationID` に格納されています。
+
+このコンピュートシェーダでは 1 ワークグループあたり 1 スレッド使用することにしていました。また、このプログラムでは粒子の数だけワークグループを x 方向に並べて起動していますから、ワークグループの番号の x 成分が粒子の番号になります。これを使って処理の対象とする粒子を選びます。
+
+```glsl
+void main()
+{
+  // ワークグループ ID をのまま粒子のインデックスに使う
+  const uint i = gl_WorkGroupID.x;
+
+  // 粒子の高さを少し下に下げる
+  position[i].y -= 0.01f;
+}
+```
+
+## [ステップ 12](https://github.com/tokoik/particle/blob/step12/README.md)

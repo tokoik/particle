@@ -151,6 +151,19 @@ auto main() -> int
   // uniform 変数 mc の場所を取得する
   const auto mcLoc{ glGetUniformLocation(program, "mc") };
 
+  // 粒子の位置を更新するコンピュートシェーダのプログラムオブジェクトを作成する
+  const auto update{ loadCompute("update.comp") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (update == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create update shader." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
   // 図形を作成する
   Object object(PARTICLE_COUNT);
   generateParticles(object, 1.0f);
@@ -163,6 +176,12 @@ auto main() -> int
   {
     // 更新処理を行う
     window.update();
+
+    // コンピュートシェーダのプログラムプログラムオブジェクトを指定する
+    glUseProgram(update);
+
+    // 計算を実行する
+    glDispatchCompute(1, 1, 1);
 
     // ウィンドウを消去する
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
