@@ -31,3 +31,20 @@ extern auto createProgram(const char* vsrc, const char* fsrc,
 /// @return 作成したプログラムオブジェクトの名前、作成できなかった場合は 0
 ///
 extern auto loadProgram(const char* vert, const char* frag) -> GLuint;
+
+///
+/// コンピュートシェーダのソースプログラムの文字列を読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] csrc コンピュートシェーダのソースプログラムの文字列
+/// @param[in] cmsg コンピュートシェーダのコンパイル時のメッセージに追加する文字列
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+extern auto createCompute(const char* csrc, const char* cmsg) -> GLuint;
+
+///
+/// コンピュートシェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] comp コンピュートシェーダのソースファイル名
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+extern auto loadCompute(const char* comp) -> GLuint;

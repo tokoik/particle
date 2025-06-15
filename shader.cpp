@@ -240,3 +240,61 @@ auto loadProgram(const char* vert, const char* frag) -> GLuint
   // 両方のソースファイルが読み込めたらプログラムオブジェクトを作成する
   return vstat && fstat ? createProgram(vsrc.data(), fsrc.data(), vert, frag) : 0;
 }
+
+///
+/// コンピュートシェーダのソースプログラムの文字列を読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] csrc コンピュートシェーダのソースプログラムの文字列
+/// @param[in] cmsg コンピュートシェーダのコンパイル時のメッセージに追加する文字列
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+auto createCompute(const char* csrc, const char* cmsg) -> GLuint
+{
+  // 空のプログラムオブジェクトを作成する
+  const GLuint program{ glCreateProgram() };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (program == 0)
+  {
+    // エラーメッセージを表示して 0 を返す
+    std::cerr << "Error: Could not create program object." << std::endl;
+    return 0;
+  }
+
+  // コンピュートシェーダのシェーダオブジェクトを作成する
+  const auto compShader{ glCreateShader(GL_COMPUTE_SHADER) };
+
+  // シェーダオブジェクトにソースプログラムの文字列を設定してコンパイルする
+  glShaderSource(compShader, 1, &csrc, nullptr);
+  glCompileShader(compShader);
+
+  // エラーが無ければシェーダオブジェクトをプログラムオブジェクトに組み込む
+  if (printShaderInfoLog(compShader, cmsg)) glAttachShader(program, compShader);
+
+  // シェーダオブジェクトに削除マークをつけておく
+  glDeleteShader(compShader);
+
+  // プログラムオブジェクトをリンクしてエラーがなければプログラムオブジェクトを返す
+  glLinkProgram(program);
+  if (printProgramInfoLog(program)) return program;
+
+  // エラーのときはプログラムオブジェクトを削除して 0 を返す
+  glDeleteProgram(program);
+  return 0;
+}
+
+///
+/// コンピュートシェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+///
+/// @param[in] comp コンピュートシェーダのソースファイル名
+/// @return プログラムオブジェクトのプログラム名、作成できなければ 0
+///
+auto loadCompute(const char* comp) -> GLuint
+{
+  // コンピュートシェーダのソースファイルを読み込んでプログラムオブジェクトを作成する
+  std::vector<GLchar> csrc;
+  if (readShaderSource(comp, csrc)) return createCompute(csrc.data(), comp);
+
+  // ソースファイルが読めなかったので 0 を返す
+  return 0;
+}
