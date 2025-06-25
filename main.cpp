@@ -177,11 +177,14 @@ auto main() -> int
     // 更新処理を行う
     window.update();
 
+    // シェーダストレージバッファオブジェクトを 0 番の結合ポイントに結合する
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, object.vbo);
+
     // コンピュートシェーダのプログラムプログラムオブジェクトを指定する
     glUseProgram(update);
 
     // 計算を実行する
-    glDispatchCompute(1, 1, 1);
+    glDispatchCompute(object.count, 1, 1);
 
     // ウィンドウを消去する
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

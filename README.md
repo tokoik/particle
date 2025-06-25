@@ -1997,3 +1997,368 @@ void main()
 ```
 
 ## [ステップ 12](https://github.com/tokoik/particle/blob/step12/README.md)
+
+## 13. 重力を考慮する
+
+現状のプログラムは粒子が一定速で移動するものでした。これを、重力にもとづいて自由落下するような動きに変更します。それには、頂点のデータとして、位置の他に速度も保持する必要があります。
+
+### 13.1 粒子の物理量に速度を追加する
+
+そこで、`vbo` に位置と速度の両方のデータを保持するようにします。そのために、位置 `position` と速度 `velocity` をメンバに持つ構造体を定義します。これは Object.h の中に置くことにします。
+
+ところで、構造体は C++ 言語の機能なので、そのメモリレイアウトは CPU 側のメモリに適用されるものです。しかし、ここでは頂点バッファオブジェクト、すなわち GPU 側のメモリにも適用することになります。したがって、この構造体のメモリレイアウトは、GPU からも利用可能なものである必要があります。
+
+GPU は、`vec4` のデータであれば、16 バイト単位のメモリアドレスに整列 (alignment) している必要があります。これは `vec3` のデータであっても 16 バイト単位に整列させなければならないため、一つの `vec3` のデータの後ろには 4 バイト分の空き (padding) が置かれます。このことを C++ のコンパイラに伝えるために、変数やメンバの宣言に`alignas(16)` というキーワードを追加します。
+
+```cpp
+#pragma once
+
+///
+/// 図形関連の処理
+///
+
+// バッファオブジェクト関連の宣言は gl.h に含まれていないので glew.h を使う
+#include <GL/glew.h>
+
+// GLM 関連
+#if !defined(_USE_MATH_DEFINES)
+#  define _USE_MATH_DEFINES
+#endif
+#if !defined(GLM_FORCE_RADIANS)
+#  define GLM_FORCE_RADIANS
+#endif
+#include <GLM/glm.hpp>
+
+///
+/// 粒子の物理量
+///
+struct Particle
+{
+  /// 位置
+  alignas(16) glm::vec4 position;
+
+  /// 速度
+  alignas(16) glm::vec3 velocity;
+};
+```
+
+Object.cpp で定義している `Object` クラスのコンストラクタでは、頂点バッファオブジェクト `vbo` に、二つのメンバを持つ構造体 `Particle` を頂点の数 `count` だけ保持できるサイズを確保するようにします。
+
+そして、メンバごとに頂点バッファオブジェクトの読み取りに使うインデックスを設定します。メンバ `position` のインデックスは 0 にし、構造体 `Particle` の先頭からのオフセット `offsetof(Particle, position)` から頂点バッファオブジェクト `vbo` からの読み出しを開始します。これを `static_cast<char*>(0)` に加えているのは、`glVertexAttribPointer()` のこの引数のデータ型がポインタだからです。同様にメンバ `velocity` のインデックスは 1 にし、構造体 `Particle` の先頭からのオフセット `offsetof(Particle, velocity)` から頂点バッファオブジェクト `vbo` からの読み出しを開始します。なお、このメンバ同士の間隔 (stride) は `sizeof(Particle)` になります。
+
+![アライメント](images/fig22.png)
+
+```cpp
+  // 頂点バッファオブジェクトのメモリを確保して頂点位置データを転送する
+  glBufferData(GL_ARRAY_BUFFER, sizeof(Particle) * count, data, GL_DYNAMIC_DRAW);
+
+  // 結合されている頂点バッファオブジェクトの position のインデックスを 0 番にする
+  glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Particle),
+    static_cast<char*>(0) + offsetof(Particle, position));
+
+  // 0 番の頂点バッファオブジェクトを有効にする
+  glEnableVertexAttribArray(0);
+
+  // 結合されている頂点バッファオブジェクトの velocity のインデックスを 1 番にする
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE,
+    sizeof(Particle), static_cast<char*>(0) + offsetof(Particle, velocity));
+
+  // 1 番の頂点バッファオブジェクトを有効にする
+  glEnableVertexAttribArray(1);
+```
+
+main.cpp の `generateParticles()` では、図形 `object` を作成した後、`vbo` (`object.vbo`) を構造体 `Particle` の配列だと見なして、その位置 `position` と速度 `velocity` の両方のメンバを初期化するようにします。`velocity` の初期値は 0 にします。
+
+```cpp
+///
+/// 点群データの作成
+///
+/// @param[in] object 点群データを作成する対象のオブジェクト
+/// @param[in] scale 点群データのスケール
+/// @param[in] sphere 球状に配置する場合は true、立方体状に配置する場合は false
+///
+void generateParticles(const Object& object, float scale, bool sphere = true)
+{
+  // 乱数生成器を初期化する
+  std::random_device seed_gen;
+  std::mt19937 engine(seed_gen());
+
+  // 頂点バッファオブジェクトをバインドして頂点データをマップする
+  glBindBuffer(GL_ARRAY_BUFFER, object.vbo);
+  const auto particle{ static_cast<Particle*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY)) };
+
+  // 球状に配置するか立方体状に配置するか
+  if (sphere)
+  {
+    // 球状に配置する場合は、0.0f から 1.0f の範囲の一様乱数を生成する
+    std::uniform_real_distribution<GLfloat> dist(0.0f, 1.0f);
+
+    // 粒子の初期位置を設定する
+    for (auto i = 0; i < object.count; ++i)
+    {
+      const float u{ dist(engine) };
+      const float v{ dist(engine) * 2.0f - 1.0f };
+      const float w{ dist(engine) };
+      const float r{ cbrt(w) * scale };
+      const float s{ sqrt(1.0f - v * v) * r };
+      const float t{ u * 6.2831853f };
+
+      // 粒子を球状に配置する
+      particle[i].position = { s * cos(t), s * sin(t), r * v, 1.0f };
+      particle[i].velocity = { 0.0f, 0.0f, 0.0f };
+    }
+  }
+  else
+  {
+    // 立方体状に配置する場合は、-0.5f * scale から 0.5f * scale の範囲の一様乱数を生成する
+    std::uniform_real_distribution<GLfloat> dist(-0.5f * scale, 0.5f * scale);
+
+    // 粒子の初期位置を設定する
+    for (auto i = 0; i < object.count; ++i)
+    {
+      // 粒子を立方体状に配置する
+      particle[i].position = { dist(engine), dist(engine), dist(engine), 1.0f };
+      particle[i].velocity = { 0.0f, 0.0f, 0.0f };
+    }
+  }
+
+  // バッファオブジェクトの結合を解除する
+  glUnmapBuffer(GL_ARRAY_BUFFER);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+```
+
+### 13.2 ユニフォームバッファを使って重力と時間間隔をコンピュートシェーダに渡す
+
+次に、重力などの粒子群全体に影響を与える物理パラメータをコンピュートシェーダに渡すために、ユニフォームバッファオブジェクトを作ります。同じことは `uniform` 変数を使っても可能ですが、今後、渡すパラメータの数が増えること、そして複数のコンピュートシェーダで同じパラメータを参照する必要が出てくることから、ここではユニフォームバッファオブジェクトを使います。
+
+まず、ユニフォームバッファに格納するパラメータをまとめた構造体を作ります。この構造体を `Physics` とし、重力のパラメータ `gravity` と時間間隔 `timestep` をメンバに追加します。これもシェーダストレージバッファオブジェクトの場合と同様、GPU から参照できるようにメモリアドレスの整列に気を配る必要があります。
+
+```cpp
+  //
+  // 粒子群の物理パラメータ
+  //
+  struct Physics
+  {
+    // 重力
+    alignas(16) glm::vec3 gravity;
+
+    // 時間間隔
+    alignas(4) GLfloat timestep;
+  };
+```
+
+構造体 `Physics` の変数 `physics` を定義し、各メンバに初期値を設定します。
+
+```cpp
+  Physics physics
+  {
+    // 重力
+    { 0.0f, -1.0f, 0.0f },
+
+    // 時間間隔
+    1.0f / 60.0f
+  };
+```
+
+`physics` のサイズのユニフォームバッファオブジェクトを作成し、そこに `physics` を転送します。
+
+```cpp
+  // 粒子群の物理パラメータを格納するユニフォームバッファオブジェクト
+  GLuint ubo;
+
+  // ユニフォームバッファオブジェクトを作成する
+  glGenBuffers(1, &ubo);
+  glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+  glBufferData(GL_UNIFORM_BUFFER, sizeof physics, &physics, GL_DYNAMIC_DRAW);
+  glBindBuffer(GL_UNIFORM_BUFFER, 0);
+```
+
+コンピュートシェーダを起動する前に、`glBindBufferBase()` を使って結合します。結合ポイントは、0 番は既にシェーダストレージバッファオブジェクトで使っているので、1 番を使います。
+
+```cpp
+  // 背景色を指定する
+  glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
+
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // 更新処理を行う
+    window.update();
+
+    // シェーダストレージバッファオブジェクトを 0 番の結合ポイントに結合する
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, object.vbo);
+
+    // ユニフォームバッファオブジェクトを 1 番の結合ポイントに結合する
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, ubo);
+
+    // 粒子の位置を更新するコンピュートシェーダを指定する
+    glUseProgram(update);
+
+    // 計算を実行する
+    glDispatchCompute(object.count, 1, 1);
+
+    // ウィンドウを消去する
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // プログラムオブジェクトを指定する
+    glUseProgram(program);
+```
+
+コンピュートシェーダ update.comp では、`layout` 文を使って、ユニフォームバッファオブジェクトと結び付けた構造体を宣言します。`std140` はユニフォームバッファオブジェクトのメモリレイアウトを C 言語や C++ 言語などに合わせることを指定します。したがって、この構造は main.cpp で定義した `Physics` 構造体と合わせます。このメンバーは、現時点では重力 `velocity` と時間間隔 `timestep` です。
+
+また `binding` は main.cpp で `glBindBufferBase()` で指定した使用するユニフォームバッファオブジェクトの結合ポイントで、ここでは 1 です。その後の `{` ... `}` 内にユニフォームバッファオブジェクトの参照に使う構造体のメンバ変数を宣言します。
+
+なお、シェーダストレージバッファオブジェクトでは、シェーダ側が想定するメモリレイアウトに `std430` を指定しましたが、ユニフォームバッファオブジェクトでは `std140` を指定します（これはより多くのデータ型を 16 バイト境界に整列させる必要があります……が、どうやら最近の OpenGL では、ここに `std430` を指定してもいいみたいです）。
+
+```glsl
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+// 粒子の物理量
+struct Particle
+{
+  // 位置
+  vec4 position;
+
+  // 速度
+  vec3 velocity;
+};
+
+// 粒子群データ
+layout(std430, binding = 0) buffer Particles
+{
+  Particle particle[];
+};
+
+// 粒子群の物理パラメータ
+layout (std140, binding = 1) uniform Physics
+{
+  // 重力
+  vec3 gravity;
+
+  // 時間間隔
+  float timestep;
+};
+```
+
+ユニフォームバッファオブジェクトの重力 `gravity` と時間間隔 `timestep` を使って、粒子の速度と位置を更新します。
+
+```glsl
+void main()
+{
+  // ワークグループ ID をのまま粒子データのインデックスに使う
+  const uint i = gl_WorkGroupID.x;
+
+  // timestep 秒後の速度
+  vec3 v = particle[i].velocity + gravity * timestep;
+
+  // timestep 秒後の位置（修正オイラー法）
+  vec3 p = particle[i].position.xyz + (v + particle[i].velocity.xyz) * timestep * 0.5;
+
+  // 速度を更新する
+  particle[i].velocity = v;
+
+  // 速度を更新する
+  particle[i].position.xyz = p;
+}
+```
+
+### 13.3 粒子を地面で跳ね返させる
+
+このままだと粒子が全部下に落ちていってしまい、見えなくなってしまいます。そこで地面を設定して、粒子がそこにぶつかったら跳ね返るようにします。まず main.cpp で、地面の高さ `floor_height` と地面の反発係数 `floor_restitution` を構造体 `Physics` のメンバに追加します。
+
+```cpp
+  //
+  // 粒子群の物理パラメータ
+  //
+  struct Physics
+  {
+    // 重力
+    alignas(16) glm::vec3 gravity;
+
+    // 地面の高さ
+    alignas(4) GLfloat floor_height;
+
+    // 地面の反発係数
+    alignas(4) GLfloat floor_restitution;
+
+    // 時間間隔
+    alignas(4) GLfloat timestep;
+  };
+```
+
+追加したメンバにも初期値を設定します。
+
+```cpp
+  Physics physics
+  {
+    // 重力
+    { 0.0f, -1.0f, 0.0f },
+
+    // 地面の高さ
+    -1.0f,
+
+    // 地面の反発係数
+    0.3f,
+
+    // 時間間隔
+    1.0f / 60.0f
+  };
+```
+
+コンピュートシェーダ update.comp でも、構造体 `Physics` に地面の高さ `floor_height` と地面の反発係数 `floor_restitution` を追加します。
+
+```glsl
+// 粒子群の物理パラメータ
+layout (std140, binding = 1) uniform Physics
+{
+  // 重力
+  vec3 gravity;
+
+  // 地面の高さ
+  float floor_height;
+
+  // 地面の反発係数
+  float floor_restitution;
+
+  // 時間間隔
+  float timestep;
+};
+```
+
+そして粒子の高さが地面の高さを下回ったら、粒子の高さを地面の高さにして、速度に地面の反発係数をかけた上で符号を反転します。
+
+```glsl
+void main()
+{
+  // ワークグループ ID をのまま粒子データのインデックスに使う
+  const uint i = gl_WorkGroupID.x;
+
+  // timestep 秒後の速度
+  vec3 v = particle[i].velocity + gravity * timestep;
+
+  // timestep 秒後の位置（修正オイラー法）
+  vec3 p = particle[i].position.xyz + (v + particle[i].velocity.xyz) * timestep * 0.5;
+
+  // 地面の高さを超えたら反発する
+  if (p.y < floor_height)
+  {
+    // 粒子の高さを地表に戻して
+    p.y = floor_height;
+
+    // 速度を反転する
+    v.y *= -floor_restitution;
+  }
+
+  // 速度を更新する
+  particle[i].velocity = v;
+
+  // 速度を更新する
+  particle[i].position.xyz = p;
+}
+```
+
+ちなみに、粒子の高さが地面の高さを下回ったときに粒子の高さを地面の高さに戻さないと、粒子が地面の下から出てこなくなります。本当は粒子が地面と衝突した時間を求め、速度を反転したら時間間隔の残り時間を使って粒子の位置を計算し直さないといけないのですが、もう書くのが面倒なので手を抜きます。
+
+## [ステップ 13](https://github.com/tokoik/particle/blob/step13/README.md)
