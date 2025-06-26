@@ -31,13 +31,21 @@ Object::Object(GLsizei count, const void* data) :
   glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
   // 頂点バッファオブジェクトのメモリを確保して頂点位置データを転送する
-  glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec4) * count, data, GL_DYNAMIC_DRAW);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(Particle) * count, data, GL_DYNAMIC_DRAW);
 
-  // 結合されている頂点バッファオブジェクトのインデックスを 0 番にする
-  glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, 0);
+  // 結合されている頂点バッファオブジェクトの position のインデックスを 0 番にする
+  glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Particle),
+    static_cast<char*>(0) + offsetof(Particle, position));
 
   // 0 番の頂点バッファオブジェクトを有効にする
   glEnableVertexAttribArray(0);
+
+  // 結合されている頂点バッファオブジェクトの velocity のインデックスを 1 番にする
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Particle),
+    static_cast<char*>(0) + offsetof(Particle, velocity));
+
+  // 1 番の頂点バッファオブジェクトを有効にする
+  glEnableVertexAttribArray(1);
 
   // 頂点配列オブジェクトの結合を解除する
   glBindVertexArray(0);

@@ -1,10 +1,36 @@
 #version 430 core
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
+// 粒子の物理量
+struct Particle
+{
+  // 位置
+  vec4 position;
+
+  // 速度
+  vec3 velocity;
+};
+
 // 粒子群データ
 layout(std430, binding = 0) buffer Particles
 {
-  vec4 position[];
+  Particle particle[];
+};
+
+// 粒子群の物理パラメータ
+layout (std140, binding = 1) uniform Physics
+{
+  // 重力
+  vec3 gravity;
+
+  // 地面の高さ
+  float floor_height;
+
+  // 地面の反発係数
+  float floor_restitution;
+
+  // 時間間隔
+  float timestep;
 };
 
 void main()
@@ -12,6 +38,25 @@ void main()
   // ワークグループ ID をのまま粒子データのインデックスに使う
   const uint i = gl_WorkGroupID.x;
 
-  // 粒子の高さを少し下に下げる
-  position[i].y -= 0.01f;
+  // timestep 秒後の速度
+  vec3 v = particle[i].velocity + gravity * timestep;
+
+  // timestep 秒後の位置（修正オイラー法）
+  vec3 p = particle[i].position.xyz + (v + particle[i].velocity.xyz) * timestep * 0.5;
+
+  // 地面の高さを超えたら反発する
+  if (p.y < floor_height)
+  {
+    // 粒子の高さを地表に戻して
+    p.y = floor_height;
+
+    // 速度を反転する
+    v.y *= -floor_restitution;
+  }
+
+  // 速度を更新する
+  particle[i].velocity = v;
+
+  // 速度を更新する
+  particle[i].position.xyz = p;
 }

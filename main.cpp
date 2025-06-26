@@ -49,7 +49,7 @@ void generateParticles(const Object& object, float scale, bool sphere = true)
 
   // 頂点バッファオブジェクトをバインドして頂点データをマップする
   glBindBuffer(GL_ARRAY_BUFFER, object.vbo);
-  const auto position{ static_cast<glm::vec4*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY)) };
+  const auto particle{ static_cast<Particle*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY)) };
 
   // 球状に配置するか立方体状に配置するか
   if (sphere)
@@ -68,7 +68,8 @@ void generateParticles(const Object& object, float scale, bool sphere = true)
       const float t{ u * 6.2831853f };
 
       // 粒子を球状に配置する
-      position[i] = { s * cos(t), s * sin(t), r * v, 1.0f };
+      particle[i].position = { s * cos(t), s * sin(t), r * v, 1.0f };
+      particle[i].velocity = { 0.0f, 0.0f, 0.0f };
     }
   }
   else
@@ -80,7 +81,8 @@ void generateParticles(const Object& object, float scale, bool sphere = true)
     for (auto i = 0; i < object.count; ++i)
     {
       // 粒子を立方体状に配置する
-      position[i] = { dist(engine), dist(engine), dist(engine), 1.0f };
+      particle[i].position = { dist(engine), dist(engine), dist(engine), 1.0f };
+      particle[i].velocity = { 0.0f, 0.0f, 0.0f };
     }
   }
 
@@ -168,6 +170,48 @@ auto main() -> int
   Object object(PARTICLE_COUNT);
   generateParticles(object, 1.0f);
 
+  //
+  // 粒子群の物理パラメータ
+  //
+  struct Physics
+  {
+    // 重力
+    alignas(16) glm::vec3 gravity;
+
+    // 地面の高さ
+    alignas(4) GLfloat floor_height;
+
+    // 地面の反発係数
+    alignas(4) GLfloat floor_restitution;
+
+    // 時間間隔
+    alignas(4) GLfloat timestep;
+  };
+
+  Physics physics
+  {
+    // 重力
+    { 0.0f, -1.0f, 0.0f },
+
+    // 地面の高さ
+    -1.0f,
+
+    // 地面の反発係数
+    0.3f,
+
+    // 時間間隔
+    1.0f / 60.0f
+  };
+
+  // 粒子群の物理パラメータを格納するユニフォームバッファオブジェクト
+  GLuint ubo;
+
+  // ユニフォームバッファオブジェクトを作成する
+  glGenBuffers(1, &ubo);
+  glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+  glBufferData(GL_UNIFORM_BUFFER, sizeof physics, &physics, GL_DYNAMIC_DRAW);
+  glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
   // 背景色を指定する
   glClearColor(0.2f, 0.3f, 0.4f, 0.0f);
 
@@ -180,7 +224,10 @@ auto main() -> int
     // シェーダストレージバッファオブジェクトを 0 番の結合ポイントに結合する
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, object.vbo);
 
-    // コンピュートシェーダのプログラムプログラムオブジェクトを指定する
+    // ユニフォームバッファオブジェクトを 1 番の結合ポイントに結合する
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, ubo);
+
+    // 粒子の位置を更新するコンピュートシェーダを指定する
     glUseProgram(update);
 
     // 計算を実行する

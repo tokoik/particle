@@ -21,6 +21,18 @@
 #include <GLM/glm.hpp>
 
 ///
+/// 粒子の物理量
+///
+struct Particle
+{
+  /// 位置
+  alignas(16) glm::vec4 position;
+
+  /// 速度
+  alignas(16) glm::vec3 velocity;
+};
+
+///
 /// 頂点配列オブジェクト
 ///
 struct Object

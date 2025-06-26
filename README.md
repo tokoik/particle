@@ -2362,3 +2362,448 @@ void main()
 ちなみに、粒子の高さが地面の高さを下回ったときに粒子の高さを地面の高さに戻さないと、粒子が地面の下から出てこなくなります。本当は粒子が地面と衝突した時間を求め、速度を反転したら時間間隔の残り時間を使って粒子の位置を計算し直さないといけないのですが、もう書くのが面倒なので手を抜きます。
 
 ## [ステップ 13](https://github.com/tokoik/particle/blob/step13/README.md)
+
+## 14. 粒子同士の衝突を考慮する
+
+ここまでで粒子は落下して地面で跳ね返るようになりましたが、粒子は真上に跳ね返って上下するだけです。このプログラムでは粒子の大きさを考慮していませんでしたから、粒子同士が衝突することはありません。そこで、ここでは粒子の大きさを設定して、粒子同士が衝突して、移動する向きを変える処理を追加します。
+
+### 14.1 粒子の衝突を処理するコンピュートシェーダ
+
+粒子の位置の更新はコンピュートシェーダ update.comp で行っています。このプログラムでは、このコンピュートシェーダは粒子ごとに並列に実行されますが、シェーダプロセッサの数は有限なので、すべての粒子について同時に実行されるとは限りません。粒子の衝突の処理は、処理対象の粒子と、残りのすべての粒子との間で行う必要がありますから、衝突の処理をこれに組み込んでしまうと、残りの粒子の中に既に他のシェーダプロセッサによって衝突の処理が行われて位置が更新されたものと、まだ衝突の処理が行われておらず位置が以前のままのものが混在することになります。
+
+そこで衝突の処理を update.comp より前に実行し、すべての粒子について衝突の処理が完了した後に、その結果をもとに update.comp で粒子の位置の更新を行うようにします。この処理を行うコンピュートシェーダのソースプログラムを collide.comp とします。「プロジェクト(P)」メニューの「新しい項目の追加(W)...」を選び、ファイル名に collide.comp を指定してください。".comp" という拡張子のファイルは Visual Studio のテンプレートにないので、ファイル名は拡張子まで指定してください。
+
+粒子同士の衝突による粒子の移動は、粒子の位置を直接変更するのではなく、その粒子に加わる力（外力）を変更することにより再現します。そこで、粒子の物理量の構造体 `struct Particle` の要素に、その粒子に加わる外力 `force` を追加します。なお、この変更は同じシェーダストレージバッファオブジェクトを使う update.comp に対しても行います。
+
+```glsl
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+// 粒子の物理量
+struct Particle
+{
+  // 位置
+  vec4 position;
+
+  // 速度
+  vec3 velocity;
+
+  // 力
+  vec3 force;
+};
+
+// 粒子群データ
+layout(std430, binding = 0) buffer Particles
+{
+  Particle particle[];
+};
+```
+
+また、粒子群の物理パラメータ `Physics` に、粒子同士の衝突処理の計算に用いる粒子の反発係数 `particle_restitution`、粒子の質量 `mass`、粒子を**球と見なした**ときの半径 `radius`、および粒子の重なり `overlap` を追加します。最後の `overlap` は、異なる粒子が同じ位置にあると見なす最小の距離です。
+
+```glsl
+// 粒子群の物理パラメータ
+layout (std140, binding = 1) uniform Physics
+{
+  // 重力
+  vec3 gravity;
+
+  // 地面の高さ
+  float floor_height;
+
+  // 地面の反発係数
+  float floor_restitution;
+
+  // 粒子の反発係数
+  float particle_restitution;
+
+  // 粒子の質量
+  float mass;
+
+  // 粒子の半径
+  float radius;
+
+  // 粒子の重なり
+  float overlap;
+
+  // 時間間隔
+  float timestep;
+};
+```
+
+処理対象の粒子 `i` は、update.comp と同様に、ワークグループの x 方向の番号 `gl_WorkGroupID.x` で決定します。そして、この粒子と衝突する他の粒子を探します。粒子の数はワークグループの x 方向の数 `gl_NumWorkGroups.x` ですから、処理対象の粒子 `i` を除くすべての粒子 `j` について調べます。
+
+```glsl
+void main()
+{
+  // ワークグループ ID をのまま頂点データのインデックスに使う
+  const uint i = gl_WorkGroupID.x;
+
+  // すべての粒子 j について
+  for (int j = 0; j < gl_NumWorkGroups.x; ++j) {
+
+    // j が i と同じ粒子だったら飛ばす
+    if (i == j) continue;
+```
+
+粒子 `i` から相手の粒子 `j` に向かうベクトル `dir` と、その長さ `dist` を求めます。
+
+![粒子間の距離](images/fig24.png)
+
+```glsl
+    // 粒子 i から粒子 j に向かう方向
+    vec3 dir = particle[j].position.xyz - particle[i].position.xyz;
+
+    // 粒子 i と粒子 j の実際の距離
+    float dist = length(dir);
+```
+
+`dist` が粒子の半径 `radius` を 2 倍した `d` より遠ければ、粒子 `i` と `j` は衝突していません。
+
+```glsl
+    // 粒子 i と粒子 j が接触する距離
+    float d = radius * 2.0;
+
+    // 粒子 i と粒子 j の距離が接触する距離以上なら衝突していないとして飛ばす
+    if (dist >= d) continue;
+```
+
+逆に `dist` が `overlap` より小さいときは、粒子 `i` と `j` は同じ位置にあるとして、`dir` をワールド座標からその粒子に向かう方向に設定します。これは粒子 `i` と `j` が近い位置にあると `dist` が 0 に近くなり、`dir` を正規化するのが難しくなるからです。本当はランダムな方向に設定したいのですが、シェーダでは乱数を使うことが難しいので、便宜上このようにしておきます。
+
+```glsl
+    // 粒子 i と粒子 j の距離が overlap 以下なら移動方向を原点から遠い方に向ける
+    if (dist < overlap) dir = normalize(particle[i].position.xyz);
+```
+
+そして粒子同士の「めり込み量」`d - dist` に粒子の反発係数 `particle_restitution` を掛けた分だけ、`dir` とは反対方向の力を加えます。`dir` / `dist` は `dir` を正規化しています。これにより粒子 `i` は粒子 `j` の衝突によって、めり込み量分の力で押し出されることになります。
+
+```glsl
+    // 粒子 i と粒子 j の距離が接触する距離以下なら衝突しているので反対向きの力を加える
+    particle[i].force -= (d - dist) * particle_restitution * dir / dist;
+  }
+}
+```
+
+この方法には問題点が二つあります。一つは、`force` への力の加算を排他的に行っていない点です。この処理は複数のシェーダプロセッサによって並行して実行されますが、仮に一つの粒子が二つ以上の粒子と同時に衝突していた場合、この加算も同時に行われます。このとき排他処理を行っていないと、あるプロセッサが `force` のデータをメモリから取り出してこの計算を実行している間に、他のプロセッサが（まだ加算の結果が書き戻されていない）同じデータを取り出して処理をすると、先に `force` に書き戻したデータが、後から処理された処理されたデータで上書きされてしまい、計算結果が失われてしまいます。
+
+もう一つは、このような衝突検出の方法では、粒子の**すり抜け**が発生する可能性があることです。これらの計算は画面の描画タイミングに合わせて実行されますが、あるフレームの描画において二つの粒子が衝突しておらず、それに続く次のフレームでも衝突していないとき、その間に粒子が衝突していたとしても、その衝突は検出されません。
+
+![粒子のすり抜け](images/fig25.png)
+
+これらに関しては、またあとで考えます。
+
+### 14.2 粒子の位置を更新するコンピュートシェーダ
+
+粒子の位置の更新は update.comp で行っています。collide.comp と update.comp は同じシェーダストレージバッファオブジェクトとユニフォームバッファオブジェクトを使いますから、それらの構造を一致させます。`struct Particle` には `force` というメンバを追加します。
+
+```glsl
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+// 粒子の物理量
+struct Particle
+{
+  // 位置
+  vec4 position;
+
+  // 速度
+  vec3 velocity;
+
+  // 力
+  vec3 force;
+};
+```
+
+粒子群の物理パラメータ `Physics` にも粒子の反発係数 `particle_restitution`、粒子の質量 `mass`、粒子の半径 `radius` および粒子の重なり `overlap` のメンバを追加します。
+
+```glsl
+// 粒子群の物理パラメータ
+layout (std140, binding = 1) uniform Physics
+{
+  // 重力
+  vec3 gravity;
+
+  // 地面の高さ
+  float floor_height;
+
+  // 地面の反発係数
+  float floor_restitution;
+
+  // 粒子の反発係数
+  float particle_restitution;
+
+  // 粒子の質量
+  float mass;
+
+  // 粒子の半径
+  float radius;
+
+  // 粒子の重なり
+  float overlap;
+
+  // 時間間隔
+  float timestep;
+};
+```
+
+これまでは、加速度は重力加速度 `gravity` だけでしたが、これに粒子に加わる力と質量から求めた加速度を加えます。F (力) = m (質量) × a (加速度) ですから、加速度は a = F / m です。
+
+```glsl
+void main()
+{
+  // ワークグループ ID をのまま粒子データのインデックスに使う
+  const uint i = gl_WorkGroupID.x;
+
+  // 加速度
+  vec3 a = particle[i].force / mass + gravity;
+
+  // timestep 秒後の速度
+  vec3 v = particle[i].velocity + a * timestep;
+
+  // timestep 秒後の位置（修正オイラー法）
+  vec3 p = particle[i].position.xyz + (v + particle[i].velocity.xyz) * 0.5 * timestep;
+```
+
+### 14.3 粒子に加わる力を初期化する
+
+粒子の物理量 `struct Particle` の力のメンバ `force` には、衝突によって発生した力を加算するので、その初期値は 0 にする必要があります。これは、`force` を `buffer Particles` と別の独立した頂点バッファオブジェクトにしていれば `glClearBufferData()` を使って行うことができます。しかし、ここでは粒子の物理量 `struct Particle` に組み込んでしまったため、`force` だけを選んで 0 にしなければいけません。
+
+そこで、これもコンピュートシェーダを使って行うことにします。この処理を行うコンピュートシェーダのソースプログラムを setup.comp とします。「プロジェクト(P)」メニューの「新しい項目の追加(W)...」を選び、ファイル名に setup.comp を指定してください。".comp" という拡張子のファイルは Visual Studio のテンプレートにないので、ファイル名は拡張子まで指定してください。
+
+粒子の物理量 `struct Particle` の構造は、update.comp や collide.comp と同じにします。そして、コンピュートシェーダが担当する粒子の `force` に 0 を代入します。
+
+```glsl
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+// 粒子の物理量
+struct Particle
+{
+  // 位置
+  vec4 position;
+
+  // 速度
+  vec3 velocity;
+
+  // 力
+  vec3 force;
+};
+
+// 粒子群データ
+layout(std430, binding = 0) buffer Particles
+{
+  Particle particle[];
+};
+
+void main()
+{
+  // ワークグループ ID をそのまま粒子データのインデックスに使う
+  const uint i = gl_WorkGroupID.x;
+
+  // 粒子の力を初期化
+  particle[i].force = vec3(0.0, 0.0, 0.0);
+}
+```
+
+### 14.4 コンピュートシェーダの起動
+
+C++ 側のプログラムで、粒子の物理量に `force` を追加した頂点バッファオブジェクトを作成するようにします。Object.h の `struct Particle` に `force` を追加します。
+
+```cpp
+///
+/// 粒子の物理量
+///
+struct Particle
+{
+  /// 位置
+  alignas(16) glm::vec4 position;
+
+  /// 速度
+  alignas(16) glm::vec3 velocity;
+
+  /// 力
+  alignas(16) glm::vec3 force;
+};
+```
+
+main.cpp では、作成したコンピュートシェーダのソースプログラム setup.comp をコンパイル・リンクし、プログラムオブジェクトを作成します。
+
+```cpp
+  // プログラムオブジェクトを作成する
+  const auto program{ loadProgram("point.vert", "point.frag") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (program == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create program object." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // uniform 変数 mc の場所を取得する
+  const auto mcLoc{ glGetUniformLocation(program, "mc") };
+
+  // 粒子の処理を初期化するコンピュートシェーダのプログラムオブジェクトを作成する
+  const auto setup{ loadCompute("setup.comp") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (setup == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create setup shader." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+```
+
+同様に collide.comp をコンパイル・リンクして、プログラムオブジェクトを作成します。
+
+```cpp
+  // 粒子の衝突を処理するコンピュートシェーダのプログラムオブジェクトを作成する
+  const auto collide{ loadCompute("collide.comp") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (collide == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create collide shader." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // 粒子の位置を更新するコンピュートシェーダのプログラムオブジェクトを作成する
+  const auto update{ loadCompute("update.comp") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (update == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create update shader." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+```
+
+ユニフォームバッファオブジェクトに設定する粒子群の物理パラメータの構造体 `Physics` にも、粒子の反発係数 `particle_restitution`、粒子の質量 `mass`、粒子の半径 `radius` および粒子の重なり `overlap` のメンバを追加します。
+
+```cpp
+  //
+  // 粒子群の物理パラメータ
+  //
+  struct Physics
+  {
+    // 重力
+    alignas(16) glm::vec3 gravity;
+
+    // 地面の高さ
+    alignas(4) GLfloat floor_height;
+
+    // 地面の反発係数
+    alignas(4) GLfloat floor_restitution;
+
+    // 粒子の反発係数
+    alignas(4) GLfloat particle_restitution;
+
+    // 粒子の質量
+    alignas(4) GLfloat mass;
+
+    // 粒子の半径
+    alignas(4) GLfloat radius;
+
+    // 粒子の重なり
+    alignas(4) GLfloat overlap;
+
+    // 時間間隔
+    alignas(4) GLfloat timestep;
+  };
+```
+
+この `Physics` 構造体の変数 `physics` のメンバに初期値を設定します。
+
+```cpp
+  Physics physics
+  {
+    // 重力
+    { 0.0f, -1.0f, 0.0f },
+
+    // 地面の高さ
+    -1.0f,
+
+    // 地面の反発係数
+    0.3f,
+
+    // 粒子の反発係数
+    0.2f,
+
+    // 粒子の質量
+    1.0f,
+
+    // 粒子の半径
+    0.1f,
+
+    // 粒子の重なり
+    0.0001f,
+
+    // 時間間隔
+    1.0f / 60.0f
+  };
+```
+
+最初にコンピュートシェーダ setup.comp を実行して、すべての頂点の物理量 `force` を 0 にします。
+
+```cpp
+  // ウィンドウが開いている間繰り返す
+  while (window)
+  {
+    // 更新処理を行う
+    window.update();
+
+    // シェーダストレージバッファオブジェクトを 0 番の結合ポイントに結合する
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, object.vbo);
+
+    // ユニフォームバッファオブジェクトを 1 番の結合ポイントに結合する
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, ubo);
+
+    // 粒子の処理を初期化するコンピュートシェーダを指定する
+    glUseProgram(setup);
+
+    // 計算を実行する
+    glDispatchCompute(object.count, 1, 1);
+```
+
+そして粒子の衝突を処理するコンピュートシェーダ collide.comp を実行します。しかし、その前にすべての粒子の `force` が 0 になっている必要があります。しかし、`force` などの頂点の物理量を保持しているシェーダストレージバッファオブジェクトからの読み出しの一貫性は保証されない（直前の書き込みが完了してから読み出しが行われるとは限らない）ため、何らかの方法で直前の書き込みが完了するのを待つ必要があります。その一つの方法が `glMemoryBarrier()` による「待ち合わせ」です。
+
+```cpp
+    // シェーダストレージバッファオブジェクトへの書き込み完了を待つ
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    // 粒子の初と津を処理するコンピュートシェーダを指定する
+    glUseProgram(collide);
+
+    // 計算を実行する
+    glDispatchCompute(object.count, 1, 1);
+```
+
+同様に、頂点の位置を更新するコンピュートシェーダ update.comp の実行も collide.comp による `force` への書き込み完了を待つ必要があるので、`glMemoryBarrier()` による待ち合わせを行います。
+
+```cpp
+    // シェーダストレージバッファオブジェクトへの書き込み完了を待つ
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    // 粒子の位置を更新するコンピュートシェーダを指定する
+    glUseProgram(update);
+
+    // 計算を実行する
+    glDispatchCompute(object.count, 1, 1);
+```
+
+実行すると、粒子が横に広がります。ただし、速度は非常に遅くなります。これはすべての他の粒子との衝突を検出するのに時間がかかっているためです。このプロログラムを高速化するには、この部分の時間の短縮がカギになります。これには k-d 木を用いる方法や、グリッドを用いる方法などがあります。
+
+今後、これらについても解説します。
+
+## [ステップ 14](https://github.com/tokoik/particle/blob/step14/README.md)
