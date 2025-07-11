@@ -30,6 +30,9 @@ struct Particle
 
   /// 速度
   alignas(16) glm::vec3 velocity;
+
+  /// 力
+  alignas(16) glm::vec3 force;
 };
 
 ///

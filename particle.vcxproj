@@ -123,9 +123,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <None Include="collide.comp" />
     <None Include="packages.config" />
     <None Include="point.frag" />
     <None Include="point.vert" />
+    <None Include="setup.comp" />
     <None Include="update.comp" />
   </ItemGroup>
   <ItemGroup>

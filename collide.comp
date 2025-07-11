@@ -1,0 +1,80 @@
+#version 430 core
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+// 粒子の物理量
+struct Particle
+{
+  // 位置
+  vec4 position;
+
+  // 速度
+  vec3 velocity;
+
+  // 力
+  vec3 force;
+};
+
+// 粒子群データ
+layout(std430, binding = 0) buffer Particles
+{
+  Particle particle[];
+};
+
+// 粒子群の物理パラメータ
+layout (std140, binding = 1) uniform Physics
+{
+  // 重力
+  vec3 gravity;
+
+  // 地面の高さ
+  float floor_height;
+
+  // 地面の反発係数
+  float floor_restitution;
+
+  // 粒子の反発係数
+  float particle_restitution;
+
+  // 粒子の質量
+  float mass;
+
+  // 粒子の半径
+  float radius;
+
+  // 粒子の重なり
+  float overlap;
+
+  // 時間間隔
+  float timestep;
+};
+
+void main()
+{
+  // ワークグループ ID をのまま頂点データのインデックスに使う
+  const uint i = gl_WorkGroupID.x;
+
+  // すべての粒子 j について
+  for (int j = 0; j < gl_NumWorkGroups.x; ++j) {
+
+    // j が i と同じ粒子だったら飛ばす
+    if (i == j) continue;
+
+    // 粒子 i から粒子 j に向かう方向
+    vec3 dir = particle[j].position.xyz - particle[i].position.xyz;
+
+    // 粒子 i と粒子 j の実際の距離
+    float dist = length(dir);
+
+    // 粒子 i と粒子 j が接触する距離
+    float d = radius * 2.0;
+
+    // 粒子 i と粒子 j の距離が接触する距離以上なら衝突していないとして飛ばす
+    if (dist >= d) continue;
+
+    // 粒子 i と粒子 j の距離が overlap 以下なら移動方向を原点から遠い方に向ける
+    dir = dist < overlap ? normalize(particle[i].position.xyz) * radius : dir / dist;
+
+    // 粒子 i と粒子 j の距離が接触する距離以下なら衝突しているので反対向きの力を加える
+    particle[i].force -= (d - dist) * particle_restitution * dir;
+  }
+}

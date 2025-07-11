@@ -28,6 +28,12 @@
     <None Include="update.comp">
       <Filter>シェーダー ファイル</Filter>
     </None>
+    <None Include="collide.comp">
+      <Filter>シェーダー ファイル</Filter>
+    </None>
+    <None Include="setup.comp">
+      <Filter>シェーダー ファイル</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="errorcheck.cpp">

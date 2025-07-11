@@ -153,6 +153,32 @@ auto main() -> int
   // uniform 変数 mc の場所を取得する
   const auto mcLoc{ glGetUniformLocation(program, "mc") };
 
+  // 粒子の処理を初期化するコンピュートシェーダのプログラムオブジェクトを作成する
+  const auto setup{ loadCompute("setup.comp") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (setup == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create setup shader." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
+  // 粒子の衝突を処理するコンピュートシェーダのプログラムオブジェクトを作成する
+  const auto collide{ loadCompute("collide.comp") };
+
+  // プログラムオブジェクトが作成できなかったら
+  if (collide == 0)
+  {
+    // エラーメッセージを出して
+    std::cerr << "Can't create collide shader." << std::endl;
+
+    // 終了する
+    return EXIT_FAILURE;
+  }
+
   // 粒子の位置を更新するコンピュートシェーダのプログラムオブジェクトを作成する
   const auto update{ loadCompute("update.comp") };
 
@@ -184,6 +210,18 @@ auto main() -> int
     // 地面の反発係数
     alignas(4) GLfloat floor_restitution;
 
+    // 粒子の反発係数
+    alignas(4) GLfloat particle_restitution;
+
+    // 粒子の質量
+    alignas(4) GLfloat mass;
+
+    // 粒子の半径
+    alignas(4) GLfloat radius;
+
+    // 粒子の重なり
+    alignas(4) GLfloat overlap;
+
     // 時間間隔
     alignas(4) GLfloat timestep;
   };
@@ -198,6 +236,18 @@ auto main() -> int
 
     // 地面の反発係数
     0.3f,
+
+    // 粒子の反発係数
+    0.2f,
+
+    // 粒子の質量
+    1.0f,
+
+    // 粒子の半径
+    0.1f,
+
+    // 粒子の重なり
+    0.0001f,
 
     // 時間間隔
     1.0f / 60.0f
@@ -226,6 +276,24 @@ auto main() -> int
 
     // ユニフォームバッファオブジェクトを 1 番の結合ポイントに結合する
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, ubo);
+
+    // 粒子の処理を初期化するコンピュートシェーダを指定する
+    glUseProgram(setup);
+
+    // 計算を実行する
+    glDispatchCompute(object.count, 1, 1);
+
+    // シェーダストレージバッファオブジェクトへの書き込み完了を待つ
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    // 粒子の初と津を処理するコンピュートシェーダを指定する
+    glUseProgram(collide);
+
+    // 計算を実行する
+    glDispatchCompute(object.count, 1, 1);
+
+    // シェーダストレージバッファオブジェクトへの書き込み完了を待つ
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
     // 粒子の位置を更新するコンピュートシェーダを指定する
     glUseProgram(update);

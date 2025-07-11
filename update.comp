@@ -9,6 +9,9 @@ struct Particle
 
   // 速度
   vec3 velocity;
+
+  // 力
+  vec3 force;
 };
 
 // 粒子群データ
@@ -29,6 +32,18 @@ layout (std140, binding = 1) uniform Physics
   // 地面の反発係数
   float floor_restitution;
 
+  // 粒子の反発係数
+  float particle_restitution;
+
+  // 粒子の質量
+  float mass;
+
+  // 粒子の半径
+  float radius;
+
+  // 粒子の重なり
+  float overlap;
+
   // 時間間隔
   float timestep;
 };
@@ -38,11 +53,14 @@ void main()
   // ワークグループ ID をのまま粒子データのインデックスに使う
   const uint i = gl_WorkGroupID.x;
 
+  // 加速度
+  vec3 a = particle[i].force / mass + gravity;
+
   // timestep 秒後の速度
-  vec3 v = particle[i].velocity + gravity * timestep;
+  vec3 v = particle[i].velocity + a * timestep;
 
   // timestep 秒後の位置（修正オイラー法）
-  vec3 p = particle[i].position.xyz + (v + particle[i].velocity.xyz) * timestep * 0.5;
+  vec3 p = particle[i].position.xyz + (v + particle[i].velocity.xyz) * 0.5 * timestep;
 
   // 地面の高さを超えたら反発する
   if (p.y < floor_height)
