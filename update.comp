@@ -29,6 +29,9 @@ layout (std140, binding = 1) uniform Physics
   // 地面の高さ
   float floor_height;
 
+  // 地面の法線
+  vec3 floor_normal;
+
   // 地面の反発係数
   float floor_restitution;
 
@@ -62,14 +65,17 @@ void main()
   // timestep 秒後の位置（修正オイラー法）
   vec3 p = particle[i].position.xyz + (v + particle[i].velocity.xyz) * 0.5 * timestep;
 
+  // 粒子の落下地点の高さ
+  float h = floor_height - dot(floor_normal.xz, p.xz) / floor_normal.y;
+
   // 地面の高さを超えたら反発する
-  if (p.y < floor_height)
+  if (p.y < h)
   {
     // 粒子の高さを地表に戻して
-    p.y = floor_height;
+    p.y = h;
 
-    // 速度を反転する
-    v.y *= -floor_restitution;
+    // 速度を反射方向に向ける
+    v = reflect(v, floor_normal) * floor_restitution;
   }
 
   // 速度を更新する

@@ -29,6 +29,9 @@ layout (std140, binding = 1) uniform Physics
   // 地面の高さ
   float floor_height;
 
+  // 地面の法線
+  vec3 floor_normal;
+
   // 地面の反発係数
   float floor_restitution;
 

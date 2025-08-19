@@ -207,6 +207,9 @@ auto main() -> int
     // 地面の高さ
     alignas(4) GLfloat floor_height;
 
+    // 地面の法線
+    alignas(16) glm::vec3 floor_normal;
+
     // 地面の反発係数
     alignas(4) GLfloat floor_restitution;
 
@@ -233,6 +236,9 @@ auto main() -> int
 
     // 地面の高さ
     -1.0f,
+
+    // 地面の法線
+    { 0.0f, 1.0f, 0.0f },
 
     // 地面の反発係数
     0.3f,
