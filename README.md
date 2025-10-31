@@ -2807,3 +2807,42 @@ main.cpp では、作成したコンピュートシェーダのソースプロ�
 今後、これらについても解説します。
 
 ## [ステップ 14](https://github.com/tokoik/particle/blob/step14/README.md)
+
+## 15. すり抜けしない衝突検出
+
+### 15.1 速度を考慮する
+
+すり抜けを防止するには、粒子の位置のほかに、速度も考慮する必要があります。
+
+![速度を考慮した衝突検出](images/fig26.png)
+
+時刻を $t$ とするとき、粒子 $i$ の位置の位置を ${\bf p}_i\left(t\right)={\bf v}_i t+{\bf p}_i\left(0\right)$、半径を $r_i$、粒子 $j$ の位置の位置を ${\bf p}_j\left(t\right)={\bf v}_j t+{\bf p}_j\left(0\right)$、半径を $r_j$ とするとき、粒子の中心間距離を $d=r_i+r_j$ とすれば、粒子 $i$、$j$ が衝突するのは $\|{\bf p}_i\left(t\right)-{\bf p}_j\left(t\right)\|=d$ のときです。
+
+この両辺を二乗します。
+
+$$\left\{{\bf p}_i\left(t\right)-{\bf p}_j\left(t\right)\right\}^2=d^2$$
+
+これに ${\bf p}_i\left(t\right)={\bf v}_i t+{\bf p}_i\left(0\right)$、${\bf p}_j\left(t\right)={\bf v}_j t+{\bf p}_j\left(0\right)$ を代入します。
+
+$$\left\{\left({\bf v}_i t+{\bf p}_i\left(0\right)\right)-\left({\bf v}_j t+{\bf p}_j\left(0\right)\right)\right\}^2-d^2=0$$
+$$\left\{\left({\bf v}_i-{\bf v}_j\right)t+\left({\bf p}_i\left(0\right)-{\bf p}_j\left(0\right)\right)\right\}^2-d^2=0$$
+
+ここで ${\bf v}={\bf v}_i-{\bf v}_j$、${\bf p}={\bf p}_i\left(0\right)-{\bf p}_j\left(0\right)$ と置くと、これは次のように書き換えられます。
+
+$$\left({\bf v}t+p\right)^2-d^2=0$$
+$${\bf v}^2 t^2+2{\bf v}\cdot{\bf p}t+{\bf p}^2-d^2=0$$
+
+これは $t$ の二次方程式ですから、$D=\left({\bf v}\cdot{\bf p}\right)^2-{\bf v}^2\left({\bf p}^2-d^2\right)$ とすれば、解の小さい方の $t$ は次式で求められます。
+
+$$t=\frac{-{\bf v}\cdot{\bf p}-\sqrt{D}}{{\bf v}^2} $$
+
+この $t$ が $t\ge 0$ かつフレーム間隔 $t_{interval}$ に対して $t\lt t_{interval}$ であれば、粒子はこのフレーム間で衝突しています。
+
+次に、${\bf p}_i\left(t\right)-{\bf p}_j\left(t\right)$ を正規化して ${\bf n}$ を求めます。
+
+$${\bf n}=\frac{{\bf p}_i\left(t\right)-{\bf p}_j\left(t\right)}{\|{\bf p}_i\left(t\right)-{\bf p}_j\left(t\right)\|}$$
+
+この ${\bf n}$ を使って、衝突後のそれぞれの粒子の跳ね返り方向を求めます。$\kappa_i$、$\kappa_j$ はそれぞれ衝突後の速度の減衰率です。なお、粒子の回転や摩擦などは考慮していません。
+
+$${\bf v}'_i=\kappa_i\left\{{\bf v}_i-2\left({\bf v}_i\cdot{\bf n}\right){\bf n}\right\}$$
+$${\bf v}'_j=\kappa_j\left\{{\bf v}_j-2\left({\bf v}_j\cdot{\bf n}\right){\bf n}\right\}$$
