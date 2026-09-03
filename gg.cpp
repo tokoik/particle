@@ -61,7 +61,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #    pragma comment(linker, "/subsystem:\"windows\" /entry:\"mainCRTStartup\"")
 #  endif
 // リンクするライブラリ
-#  pragma comment(lib, "lib\\" GLFW3_PLATFORM "\\" GLFW3_CONFIGURATION "\\glfw3.lib")
+// #  pragma comment(lib, "lib\\" GLFW3_PLATFORM "\\" GLFW3_CONFIGURATION "\\glfw3.lib")
 #endif
 
 // OpenGL 3.2 の API のエントリポイント

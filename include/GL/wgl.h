@@ -1,4 +1,4 @@
-#ifndef __wgl_h_
+﻿#ifndef __wgl_h_
 #define __wgl_h_ 1
 
 #ifdef __cplusplus
